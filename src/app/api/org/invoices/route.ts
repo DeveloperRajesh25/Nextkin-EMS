@@ -1,0 +1,71 @@
+import { NextRequest } from 'next/server'
+import { withErrorHandler, parseBody, jsonOk, jsonError, friendlyDbError } from '@/lib/api'
+import { apiRequireOrg } from '@/lib/auth/guards'
+import { createSupabaseServerClient } from '@/lib/supabase/server'
+import { invoiceSchema } from '@/lib/schemas'
+import { computeTotals, normalizeItems } from '@/lib/invoice'
+import { audit } from '@/lib/audit'
+
+export const dynamic = 'force-dynamic'
+
+/**
+ * Create an invoice.
+ *
+ * Totals are RECOMPUTED here from the line items rather than accepted from the
+ * client. The form shows a live preview using the same helper, so the numbers
+ * always agree — but the stored figure is the one this server derived.
+ */
+async function handlePOST(request: NextRequest) {
+  const gate = await apiRequireOrg()
+  if (!gate.ok) return gate.response
+  const { ctx } = gate
+
+  const input = await parseBody(request, invoiceSchema)
+  const totals = computeTotals(input.items, input.taxPercent, input.amountPaid)
+
+  const supabase = await createSupabaseServerClient()
+
+  const { data, error } = await supabase
+    .from('invoices')
+    .insert({
+      tenant_id: ctx.tenantId,
+      invoice_number: input.invoiceNumber,
+      bill_to: input.billTo,
+      items: normalizeItems(input.items),
+      currency: input.currency,
+      subtotal: totals.subtotal,
+      tax_percent: input.taxPercent,
+      total: totals.total,
+      amount_paid: input.amountPaid,
+      balance_due: totals.balanceDue,
+      status: input.status,
+      issue_date: input.issueDate,
+      due_date: input.dueDate ?? null,
+      notes: input.notes,
+      created_by: ctx.userId,
+    })
+    .select('id, invoice_number')
+    .single()
+
+  if (error) {
+    if (error.code === '23505') {
+      return jsonError('You already have an invoice with that number.', 409)
+    }
+    return jsonError(friendlyDbError(error), 400)
+  }
+
+  await audit({
+    tenantId: ctx.tenantId,
+    actorId: ctx.userId,
+    actorEmail: ctx.email,
+    action: 'invoice.created',
+    entity: 'invoices',
+    entityId: data.id,
+    meta: { invoiceNumber: data.invoice_number, total: totals.total },
+    request,
+  })
+
+  return jsonOk({ id: data.id }, 201)
+}
+
+export const POST = withErrorHandler(handlePOST)

@@ -1,0 +1,160 @@
+import 'server-only'
+
+/**
+ * Server authorization gates — defense in depth behind RLS.
+ *
+ * Two flavours of the same rules, because pages and APIs need different
+ * failures:
+ *   • `requireX()`  — for Server Components / pages. Redirects.
+ *   • `apiRequireX()` — for Route Handlers / Server Actions. Returns a
+ *     discriminated union so the caller answers with a status code.
+ *
+ * They share `loadContext()`, so there is exactly one implementation of each
+ * rule. Note in particular that `requireOrg` insists on an ACTIVE profile in an
+ * ACTIVE tenant: filtering on role alone leaves the deactivated-user hole open,
+ * because a role does not disappear when someone is switched off.
+ */
+import { redirect } from 'next/navigation'
+import { NextResponse } from 'next/server'
+import { loadContext, homeFor, isUsable, type AppContext } from '@/lib/auth/context'
+import { safeEqual } from '@/lib/crypto'
+import { rateLimit, limitKey, getClientIp } from '@/lib/rate-limit'
+
+export type { AppContext }
+
+export interface OrgContext extends AppContext {
+  tenantId: string
+  tenant: NonNullable<AppContext['tenant']>
+}
+
+// ---------------------------------------------------------------------------
+// Page guards — redirect on failure
+// ---------------------------------------------------------------------------
+
+export async function requireUser(): Promise<AppContext> {
+  const ctx = await loadContext()
+  if (!ctx) redirect('/login')
+  if (!ctx.isActive) redirect('/account-inactive')
+  if (ctx.role !== 'super_admin' && ctx.tenant?.status === 'suspended') {
+    redirect('/workspace-suspended')
+  }
+  // A teammate signing in for the first time is confined to one route until the
+  // system-issued temporary password is replaced.
+  if (ctx.mustChangePassword) redirect('/change-password')
+  return ctx
+}
+
+export async function requireRole(role: AppContext['role']): Promise<AppContext> {
+  const ctx = await requireUser()
+  if (ctx.role !== role) redirect(homeFor(ctx.role))
+  return ctx
+}
+
+/** An ACTIVE org user in an ACTIVE tenant. */
+export async function requireOrg(): Promise<OrgContext> {
+  const ctx = await requireUser()
+  if (ctx.role !== 'org' || !ctx.tenantId || !ctx.tenant) redirect(homeFor(ctx.role))
+  return ctx as OrgContext
+}
+
+/** An ACTIVE employee in an ACTIVE tenant. */
+export async function requireEmployee(): Promise<OrgContext> {
+  const ctx = await requireUser()
+  if (ctx.role !== 'employee' || !ctx.tenantId || !ctx.tenant) redirect(homeFor(ctx.role))
+  return ctx as OrgContext
+}
+
+export async function requireSuperAdmin(): Promise<AppContext> {
+  const ctx = await requireUser()
+  if (ctx.role !== 'super_admin') redirect(homeFor(ctx.role))
+  return ctx
+}
+
+/** Either role, for pages both portals share (meetings, kanban, notifications). */
+export async function requireTenantUser(): Promise<OrgContext> {
+  const ctx = await requireUser()
+  if (!ctx.tenantId || !ctx.tenant) redirect(homeFor(ctx.role))
+  return ctx as OrgContext
+}
+
+// ---------------------------------------------------------------------------
+// API guards — return a Response on failure
+// ---------------------------------------------------------------------------
+
+export type Gate<T> = { ok: true; ctx: T } | { ok: false; response: NextResponse }
+
+const deny = (message: string, status: number): { ok: false; response: NextResponse } => ({
+  ok: false,
+  response: NextResponse.json({ error: message }, { status }),
+})
+
+export async function apiRequireUser(): Promise<Gate<AppContext>> {
+  const ctx = await loadContext()
+  if (!ctx) return deny('Not authenticated', 401)
+  if (!isUsable(ctx)) return deny('This account is no longer active', 403)
+  return { ok: true, ctx }
+}
+
+export async function apiRequireOrg(): Promise<Gate<OrgContext>> {
+  const gate = await apiRequireUser()
+  if (!gate.ok) return gate
+  if (gate.ctx.role !== 'org' || !gate.ctx.tenantId || !gate.ctx.tenant) {
+    return deny('Organization access required', 403)
+  }
+  return { ok: true, ctx: gate.ctx as OrgContext }
+}
+
+export async function apiRequireEmployee(): Promise<Gate<OrgContext>> {
+  const gate = await apiRequireUser()
+  if (!gate.ok) return gate
+  if (gate.ctx.role !== 'employee' || !gate.ctx.tenantId || !gate.ctx.tenant) {
+    return deny('Employee access required', 403)
+  }
+  return { ok: true, ctx: gate.ctx as OrgContext }
+}
+
+export async function apiRequireTenantUser(): Promise<Gate<OrgContext>> {
+  const gate = await apiRequireUser()
+  if (!gate.ok) return gate
+  if (!gate.ctx.tenantId || !gate.ctx.tenant) return deny('Workspace access required', 403)
+  return { ok: true, ctx: gate.ctx as OrgContext }
+}
+
+export async function apiRequireSuperAdmin(): Promise<Gate<AppContext>> {
+  const gate = await apiRequireUser()
+  if (!gate.ok) return gate
+  if (gate.ctx.role !== 'super_admin') return deny('Platform administrator access required', 403)
+  return { ok: true, ctx: gate.ctx }
+}
+
+// ---------------------------------------------------------------------------
+// Cron guard
+// ---------------------------------------------------------------------------
+
+/**
+ * Authenticate a scheduled job.
+ *
+ * `safeEqual` rather than `===` so the secret cannot be recovered a byte at a
+ * time from response timing, and a per-IP limit first so the endpoint cannot be
+ * hammered to probe it (or to trigger expensive work). Returns null to proceed.
+ */
+export async function requireCron(request: Request, job: string): Promise<NextResponse | null> {
+  const limited = await rateLimit(limitKey(`cron:${job}`, getClientIp(request)), 30, 60 * 1000)
+  if (!limited.ok) {
+    return NextResponse.json({ error: 'Too many requests' }, { status: 429 })
+  }
+
+  const configured = process.env.CRON_SECRET
+  if (!configured || configured.length < 16) {
+    // 503, not 401: the job is not misauthenticated, the server is misconfigured.
+    // A scheduler using `curl -fsS` turns this into a loud red failure.
+    return NextResponse.json({ error: 'Cron is not configured' }, { status: 503 })
+  }
+
+  const provided = request.headers.get('x-cron-secret') || ''
+  if (!safeEqual(provided, configured)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  return null
+}

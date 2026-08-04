@@ -1,0 +1,112 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/**
+ * Brand palette, derived from the NextKinLife logo (crimson on near-black) and
+ * refined to premium shades. Stored as raw HSL triples so Tailwind can compose
+ * them with opacity modifiers (`bg-brand-600/10`) and so a per-org colour can be
+ * swapped in at runtime by overriding just these three variables.
+ *
+ *   --brand-600  #C41E33   primary crimson  -> 352 73% 44%
+ *   --brand-700  #A5182A   hover / pressed  -> 352 74% 37%
+ *   --brand-50   #FCEBEE   tint             -> 351 76% 95%
+ */
+@layer base {
+  :root {
+    --brand-50:  351 76% 95%;
+    --brand-100: 351 74% 91%;
+    --brand-200: 352 72% 84%;
+    --brand-500: 352 65% 52%;
+    --brand-600: 352 73% 44%;
+    --brand-700: 352 74% 37%;
+    --brand-800: 352 72% 30%;
+
+    --sidebar:       225 15% 11%;   /* #16181F premium near-black charcoal */
+    --sidebar-fg:    228 13% 91%;   /* #E7E8EC */
+    --sidebar-muted: 228 8%  62%;
+    --sidebar-hover: 225 14% 17%;
+
+    --page-bg:   220 16% 97%;       /* #F6F7F9 */
+    --card:      0 0% 100%;
+    --secondary: 220 16% 96%;
+    --text:      227 13% 12%;       /* #1A1C23 */
+    --muted:     220 9%  46%;       /* #6B7280 */
+    --border:    222 18% 92%;       /* #E7E9EE */
+
+    --success: 142 71% 36%;         /* #16A34A */
+    --warning: 38 92%  50%;         /* #F59E0B */
+    --info:    221 83% 53%;         /* #2563EB */
+    --danger:  352 73% 44%;         /* #C41E33 */
+  }
+
+  * {
+    @apply border-line;
+  }
+
+  body {
+    @apply bg-page text-ink antialiased;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  }
+
+  /* Numbers in stat cards and tables should never jitter as they update. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer components {
+  /* The one card recipe the whole app uses: white, rounded-xl, 1px line, soft. */
+  .card-surface {
+    @apply rounded-xl border border-line bg-card shadow-sm;
+  }
+
+  .focus-ring {
+    @apply outline-none ring-offset-2 ring-offset-page focus-visible:ring-2 focus-visible:ring-brand-600/70;
+  }
+
+  /* Skeleton shimmer — used by every loading state so they all feel like one app. */
+  .skeleton {
+    @apply relative overflow-hidden rounded-md bg-line/70;
+  }
+  .skeleton::after {
+    content: '';
+    @apply absolute inset-0 -translate-x-full animate-shimmer;
+    background-image: linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0) 0,
+      rgba(255, 255, 255, 0.65) 50%,
+      rgba(255, 255, 255, 0) 100%
+    );
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-line;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #fff;
+  }
+}

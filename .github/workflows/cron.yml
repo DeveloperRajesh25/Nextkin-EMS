@@ -1,0 +1,104 @@
+name: Scheduled jobs
+
+# =============================================================================
+# THE RELIABILITY RULE (§8)
+#
+# Every step below uses `curl -fsS`, and the flags are the entire point:
+#
+#   -f  fail on any HTTP >= 400, so curl EXITS NON-ZERO and this workflow turns
+#       red. Without it, curl happily reports success after receiving a 500 and
+#       the job shows green while the visa engine has not run for a month. That
+#       silent-green failure mode is the specific thing this file exists to
+#       avoid — do NOT replace `-f` with `-v`.
+#   -s  quiet progress output.
+#   -S  but still print the error when -f trips, so the log says what happened.
+#
+# `--retry 2 --retry-connrefused` rides out a cold start or a brief blip without
+# masking a genuine failure, because a failing endpoint still fails after the
+# retries and the workflow still goes red.
+#
+# The response body is echoed so a partially-failing run (which answers 200 with
+# an `errors` array) is visible in the log even though it did not fail the job.
+# =============================================================================
+
+on:
+  schedule:
+    # Visa reminders: 03:30 UTC daily = 09:00 IST, inside the working day for the
+    # default Asia/Kolkata tenant. The endpoint recomputes the day difference in
+    # EACH tenant's own timezone, so this single run serves every timezone.
+    - cron: '30 3 * * *'
+    # Calendar incremental-sync fallback, every 15 minutes. Google push channels
+    # expire and notifications get missed during deploys; this is what keeps the
+    # two sides consistent when a webhook never arrives.
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+    inputs:
+      job:
+        description: Which job to run
+        required: true
+        default: visa-reminders
+        type: choice
+        options: [visa-reminders, calendar-sync, both]
+
+concurrency:
+  # A slow run must not overlap the next tick. The visa engine is idempotent
+  # anyway (UNIQUE(work_auth_id, milestone)), but overlapping calendar syncs
+  # would waste Google API quota.
+  group: ems-cron-${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  visa-reminders:
+    name: Visa reminder engine
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.schedule == '30 3 * * *' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.job == 'visa-reminders' || inputs.job == 'both'))
+    steps:
+      - name: Trigger /api/cron/visa-reminders
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          echo "Calling ${APP_URL}/api/cron/visa-reminders"
+          response=$(curl -fsS \
+            --retry 2 --retry-connrefused --max-time 120 \
+            -X POST \
+            -H "x-cron-secret: ${CRON_SECRET}" \
+            -H "Content-Type: application/json" \
+            "${APP_URL}/api/cron/visa-reminders")
+          echo "$response"
+          # A 200 with a non-empty `errors` array means the run worked but some
+          # tenants failed. Surface it as a warning rather than a hard failure,
+          # so a single bad tenant does not trigger a retry of everything.
+          if echo "$response" | grep -q '"errors":\[[^]]'; then
+            echo "::warning title=Visa reminders::Run completed with per-tenant errors — see the response above"
+          fi
+
+  calendar-sync:
+    name: Google Calendar sync fallback
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.schedule == '*/15 * * * *' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.job == 'calendar-sync' || inputs.job == 'both'))
+    steps:
+      - name: Trigger /api/cron/calendar-sync
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          echo "Calling ${APP_URL}/api/cron/calendar-sync"
+          response=$(curl -fsS \
+            --retry 2 --retry-connrefused --max-time 120 \
+            -X POST \
+            -H "x-cron-secret: ${CRON_SECRET}" \
+            -H "Content-Type: application/json" \
+            "${APP_URL}/api/cron/calendar-sync")
+          echo "$response"
+          if echo "$response" | grep -q '"needsReauth":[1-9]'; then
+            echo "::warning title=Calendar sync::One or more organizations need to reconnect Google Calendar"
+          fi

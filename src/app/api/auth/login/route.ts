@@ -1,0 +1,95 @@
+import { NextRequest } from 'next/server'
+import { createSupabaseServerClient } from '@/lib/supabase/server'
+import { loginSchema } from '@/lib/schemas'
+import { withErrorHandler, parseBody, jsonOk, jsonError } from '@/lib/api'
+import {
+  limitAuthByIp, isLoginLocked, recordLoginFailure, clearLoginFailures, LOCKOUT,
+} from '@/lib/rate-limit'
+import { audit } from '@/lib/audit'
+import { homeFor } from '@/lib/auth/context'
+
+export const dynamic = 'force-dynamic'
+
+/**
+ * Sign in.
+ *
+ * Runs on the server rather than calling `signInWithPassword` from the browser,
+ * because the throttling and lockout below only mean something if the client
+ * cannot skip them.
+ *
+ * ENUMERATION SAFETY is the design constraint throughout:
+ *   • The lockout counter is keyed on a hash of the submitted address and is
+ *     incremented for UNKNOWN addresses too. If only real accounts could lock
+ *     out, the lockout itself would answer "is this person registered?".
+ *   • Every failure returns the same message and the same status, whether the
+ *     account is missing, the password is wrong, or the email is unconfirmed.
+ *     The one exception is a LOCKED account, which has to say so or the user
+ *     cannot understand why a correct password is failing — and by then the
+ *     attacker has already had to spend ten guesses on that address.
+ */
+async function handlePOST(request: NextRequest) {
+  // Per-IP first, before any lookup, so timing reveals nothing.
+  const ipLimit = await limitAuthByIp(request, 'login')
+  if (!ipLimit.ok) {
+    return jsonError('Too many sign-in attempts. Please wait a few minutes.', 429)
+  }
+
+  const { email, password } = await parseBody(request, loginSchema)
+
+  if (await isLoginLocked(email)) {
+    return jsonError(
+      `Too many failed attempts. Sign-in for this address is paused for ${Math.round(
+        LOCKOUT.windowMs / 60000
+      )} minutes.`,
+      429
+    )
+  }
+
+  const supabase = await createSupabaseServerClient()
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+
+  if (error || !data.user) {
+    await recordLoginFailure(email)
+    await audit({
+      action: 'auth.login_failed',
+      entity: 'auth.users',
+      meta: { reason: error?.message ?? 'unknown' },
+      request,
+    })
+    // Deliberately identical for every failure mode.
+    return jsonError('Those details did not match. Please check and try again.', 401)
+  }
+
+  await clearLoginFailures(email)
+
+  // Resolve the landing route from the profile, not from the request.
+  const { data: profileRows } = await supabase.rpc('current_profile')
+  const profile = Array.isArray(profileRows) ? profileRows[0] : profileRows
+
+  if (profile && !profile.is_active) {
+    await supabase.auth.signOut()
+    return jsonError('This account has been deactivated. Please contact your administrator.', 403)
+  }
+  if (profile && profile.role !== 'super_admin' && profile.tenant_status === 'suspended') {
+    await supabase.auth.signOut()
+    return jsonError('This workspace is suspended. Please contact support.', 403)
+  }
+
+  await audit({
+    tenantId: profile?.tenant_id ?? null,
+    actorId: data.user.id,
+    actorEmail: data.user.email ?? null,
+    action: 'auth.login',
+    entity: 'auth.users',
+    entityId: data.user.id,
+    request,
+  })
+
+  const redirectTo = profile?.must_change_password
+    ? '/change-password'
+    : homeFor(profile?.role ?? 'employee')
+
+  return jsonOk({ redirectTo })
+}
+
+export const POST = withErrorHandler(handlePOST)

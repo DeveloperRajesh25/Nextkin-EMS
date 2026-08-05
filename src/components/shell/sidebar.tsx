@@ -11,6 +11,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
   DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/primitives'
+import { ThemeToggle } from '@/components/theme-toggle'
 import { cn, initials } from '@/lib/utils'
 import type { UserRole } from '@/types/db'
 
@@ -85,32 +86,35 @@ export function Sidebar({ user, brand }: { user: ShellUser; brand: ShellBrand })
   )
 
   const brandBlock = (
-    <div className="flex h-16 shrink-0 items-center gap-2.5 border-b border-white/[0.07] px-5">
-      {brand.logoUrl ? (
-        <Image
-          src={brand.logoUrl}
-          alt=""
-          width={28}
-          height={28}
-          className="size-7 rounded-md object-cover"
-          unoptimized
-        />
-      ) : (
-        <span className="grid size-7 shrink-0 place-items-center rounded-md bg-brand-600 text-[13px] font-bold text-white">
-          {brand.name.charAt(0).toUpperCase()}
+    <div className="flex h-16 shrink-0 items-center justify-between gap-2.5 border-b border-sidebar-border px-5">
+      <div className="flex min-w-0 items-center gap-2.5">
+        {brand.logoUrl ? (
+          <Image
+            src={brand.logoUrl}
+            alt=""
+            width={28}
+            height={28}
+            className="size-7 rounded-md object-cover"
+            unoptimized
+          />
+        ) : (
+          <span className="grid size-7 shrink-0 place-items-center rounded-md bg-brand-600 text-[13px] font-bold text-white">
+            {brand.name.charAt(0).toUpperCase()}
+          </span>
+        )}
+        <span className="truncate text-[15px] font-semibold tracking-[-0.01em] text-sidebar-fg">
+          {brand.name}
         </span>
-      )}
-      <span className="truncate text-[15px] font-semibold tracking-[-0.01em] text-sidebar-fg">
-        {brand.name}
-      </span>
+      </div>
+      <ThemeToggle />
     </div>
   )
 
   const account = (
-    <div className="shrink-0 border-t border-white/[0.07] p-3">
+    <div className="shrink-0 border-t border-sidebar-border p-3">
       <DropdownMenu>
         <DropdownMenuTrigger className="focus-ring flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition hover:bg-sidebar-hover">
-          <Avatar className="size-8 border-white/10">
+          <Avatar className="size-8 border-sidebar-border">
             {user.photoUrl ? <AvatarImage src={user.photoUrl} alt="" /> : null}
             <AvatarFallback className="bg-brand-600 text-white">
               {initials(user.name, user.email)}
@@ -179,16 +183,37 @@ export function Sidebar({ user, brand }: { user: ShellUser; brand: ShellBrand })
             aria-hidden
           />
           <aside className="absolute inset-y-0 left-0 flex w-72 animate-slide-in-left flex-col bg-sidebar">
-            <div className="relative">
-              {brandBlock}
-              <button
-                type="button"
-                onClick={() => setOpen(false)}
-                aria-label="Close navigation"
-                className="focus-ring absolute right-3 top-1/2 -translate-y-1/2 rounded-lg p-2 text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-fg"
-              >
-                <X className="size-5" />
-              </button>
+            <div className="flex h-16 shrink-0 items-center justify-between gap-2.5 border-b border-sidebar-border px-5">
+              <div className="flex min-w-0 items-center gap-2.5">
+                {brand.logoUrl ? (
+                  <Image
+                    src={brand.logoUrl}
+                    alt=""
+                    width={28}
+                    height={28}
+                    className="size-7 rounded-md object-cover"
+                    unoptimized
+                  />
+                ) : (
+                  <span className="grid size-7 shrink-0 place-items-center rounded-md bg-brand-600 text-[13px] font-bold text-white">
+                    {brand.name.charAt(0).toUpperCase()}
+                  </span>
+                )}
+                <span className="truncate text-[15px] font-semibold tracking-[-0.01em] text-sidebar-fg">
+                  {brand.name}
+                </span>
+              </div>
+              <div className="flex shrink-0 items-center gap-1">
+                <ThemeToggle />
+                <button
+                  type="button"
+                  onClick={() => setOpen(false)}
+                  aria-label="Close navigation"
+                  className="focus-ring rounded-lg p-2 text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-fg"
+                >
+                  <X className="size-5" />
+                </button>
+              </div>
             </div>
             {nav}
             {account}

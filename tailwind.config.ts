@@ -45,6 +45,7 @@ const config: Config = {
           fg: 'hsl(var(--sidebar-fg))',
           muted: 'hsl(var(--sidebar-muted))',
           hover: 'hsl(var(--sidebar-hover))',
+          border: 'hsl(var(--sidebar-border))',
         },
         page: 'hsl(var(--page-bg))',
         card: {

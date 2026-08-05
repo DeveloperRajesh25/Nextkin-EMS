@@ -22,10 +22,12 @@
     --brand-700: 352 74% 37%;
     --brand-800: 352 72% 30%;
 
-    --sidebar:       225 15% 11%;   /* #16181F premium near-black charcoal */
-    --sidebar-fg:    228 13% 91%;   /* #E7E8EC */
-    --sidebar-muted: 228 8%  62%;
-    --sidebar-hover: 225 14% 17%;
+    /* Light theme: sidebar rides along with the page, not near-black. */
+    --sidebar:        0 0% 100%;
+    --sidebar-fg:     227 13% 12%;
+    --sidebar-muted:  220 9%  46%;
+    --sidebar-hover:  220 16% 96%;
+    --sidebar-border: 222 18% 92%;
 
     --page-bg:   220 16% 97%;       /* #F6F7F9 */
     --card:      0 0% 100%;
@@ -38,6 +40,22 @@
     --warning: 38 92%  50%;         /* #F59E0B */
     --info:    221 83% 53%;         /* #2563EB */
     --danger:  352 73% 44%;         /* #C41E33 */
+  }
+
+  /* Dark theme, toggled via the `dark` class on <html> (see theme-provider). */
+  .dark {
+    --sidebar:        225 15% 11%;  /* #16181F premium near-black charcoal */
+    --sidebar-fg:     228 13% 91%;  /* #E7E8EC */
+    --sidebar-muted:  228 8%  62%;
+    --sidebar-hover:  225 14% 17%;
+    --sidebar-border: 225 13% 20%;
+
+    --page-bg:   226 16% 9%;
+    --card:      225 15% 12%;
+    --secondary: 225 13% 16%;
+    --text:      228 13% 91%;
+    --muted:     228 8%  62%;
+    --border:    225 13% 20%;
   }
 
   * {

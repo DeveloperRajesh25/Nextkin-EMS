@@ -12,7 +12,7 @@ import { apiPatch, uploadFile, ApiClientError } from '@/lib/fetcher'
 import { COMMON_TIMEZONES } from '@/lib/timezones'
 import { contrastOn } from '@/lib/utils'
 
-const PRESET_COLORS = ['#C41E33', '#2563EB', '#16A34A', '#7C3AED', '#EA580C', '#0F766E']
+const HEX_RE = /^#[0-9a-f]{6}$/i
 
 export function SettingsForm({
   tenant,
@@ -137,22 +137,16 @@ export function SettingsForm({
 
           <FormField label="Primary colour" error={fields.primaryColor}>
             <div className="space-y-2.5">
-              <div className="flex flex-wrap items-center gap-2">
-                {PRESET_COLORS.map((color) => (
-                  <button
-                    key={color}
-                    type="button"
-                    aria-label={`Use ${color}`}
-                    aria-pressed={primaryColor.toLowerCase() === color.toLowerCase()}
-                    onClick={() => setPrimaryColor(color)}
-                    className={`focus-ring size-8 rounded-lg transition ${
-                      primaryColor.toLowerCase() === color.toLowerCase()
-                        ? 'ring-2 ring-ink ring-offset-2'
-                        : 'ring-1 ring-line'
-                    }`}
-                    style={{ background: color }}
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="focus-ring relative size-10 shrink-0 cursor-pointer overflow-hidden rounded-full ring-1 ring-line">
+                  <input
+                    type="color"
+                    value={HEX_RE.test(primaryColor) ? primaryColor : '#16A34A'}
+                    onChange={(e) => setPrimaryColor(e.target.value.toUpperCase())}
+                    className="absolute -left-2 -top-2 size-14 cursor-pointer border-0 bg-transparent p-0"
+                    aria-label="Pick a custom colour"
                   />
-                ))}
+                </label>
                 <Input
                   value={primaryColor}
                   onChange={(e) => setPrimaryColor(e.target.value)}

@@ -9,6 +9,8 @@ import { sendEmployeeCredentials, isEmailConfigured } from '@/lib/email'
 import { rateLimit, limitKey } from '@/lib/rate-limit'
 import { audit } from '@/lib/audit'
 import { keyBelongsToTenant } from '@/lib/r2'
+import { appUrl } from '@/lib/env'
+import { EMPLOYEE_LOGIN_PATH } from '@/lib/routes'
 
 export const dynamic = 'force-dynamic'
 
@@ -179,6 +181,9 @@ async function handlePOST(request: NextRequest) {
       // anywhere and cannot be retrieved again.
       tempPassword,
       emailSent,
+      // Credentials without the door they open are half an instruction: these
+      // will not work on /login, which is the page the org itself uses.
+      loginUrl: `${appUrl()}${EMPLOYEE_LOGIN_PATH}`,
     },
     201
   )

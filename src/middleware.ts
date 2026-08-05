@@ -17,8 +17,10 @@ type CookieToSet = { name: string; value: string; options: CookieOptions }
  * routing costs no database round-trip.
  */
 
+/** Pages a signed-out visitor may reach. */
 const PUBLIC_PATHS = [
   '/login',
+  '/employee-login',
   '/signup',
   '/forgot-password',
   '/auth/confirm',
@@ -30,12 +32,19 @@ const PUBLIC_PATHS = [
   '/api/integrations/google/webhook',
 ]
 
-/** Routes a signed-in user may visit regardless of role. */
+/**
+ * Routes a signed-in user may visit regardless of role.
+ *
+ * `/session-invalid` earns its place here for the same reason it exists: it is
+ * where an unresolvable session is parked, so middleware must never route it
+ * away on the strength of a role claim it does not have.
+ */
 const ROLE_NEUTRAL = [
   '/change-password',
   '/reset-password',
   '/account-inactive',
   '/workspace-suspended',
+  '/session-invalid',
   '/api/',
   '/auth/',
 ]
@@ -56,8 +65,15 @@ function isPublic(pathname: string): boolean {
   return PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`))
 }
 
+/**
+ * Matches on a path SEGMENT boundary, never a bare prefix: a plain `startsWith`
+ * would hand `/account-inactive-evil` the same free pass as `/account-inactive`.
+ * Entries that already end in `/` are namespace prefixes and match as written.
+ */
 function isRoleNeutral(pathname: string): boolean {
-  return ROLE_NEUTRAL.some((p) => pathname === p || pathname.startsWith(p))
+  return ROLE_NEUTRAL.some((p) =>
+    p.endsWith('/') ? pathname.startsWith(p) : pathname === p || pathname.startsWith(`${p}/`)
+  )
 }
 
 /**
@@ -112,7 +128,13 @@ export async function middleware(request: NextRequest) {
   // --- Not signed in -------------------------------------------------------
   if (!session) {
     if (isPublic(pathname)) return response
-    const redirectUrl = new URL('/login', request.url)
+    // Send them to the door that matches where they were headed. A session that
+    // expires under an employee mid-shift should not resurface on the admin
+    // sign-in, which would refuse the only password they have.
+    const door = pathname === '/employee' || pathname.startsWith('/employee/')
+      ? '/employee-login'
+      : '/login'
+    const redirectUrl = new URL(door, request.url)
     // Preserve the destination so sign-in can return the user to it.
     if (pathname !== '/') redirectUrl.searchParams.set('next', pathname)
     return NextResponse.redirect(redirectUrl)
@@ -122,7 +144,8 @@ export async function middleware(request: NextRequest) {
   const home = (role && ROLE_HOME[role]) || '/employee'
 
   // --- Signed in, on an auth page -> go home -------------------------------
-  if (pathname === '/' || pathname === '/login' || pathname === '/signup') {
+  const AUTH_PAGES = ['/', '/login', '/employee-login', '/signup']
+  if (AUTH_PAGES.includes(pathname)) {
     return NextResponse.redirect(new URL(home, request.url))
   }
 

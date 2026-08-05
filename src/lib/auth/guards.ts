@@ -16,7 +16,7 @@ import 'server-only'
  */
 import { redirect } from 'next/navigation'
 import { NextResponse } from 'next/server'
-import { loadContext, homeFor, isUsable, type AppContext } from '@/lib/auth/context'
+import { resolveContext, homeFor, isUsable, type AppContext } from '@/lib/auth/context'
 import { safeEqual } from '@/lib/crypto'
 import { rateLimit, limitKey, getClientIp } from '@/lib/rate-limit'
 
@@ -32,8 +32,13 @@ export interface OrgContext extends AppContext {
 // ---------------------------------------------------------------------------
 
 export async function requireUser(): Promise<AppContext> {
-  const ctx = await loadContext()
-  if (!ctx) redirect('/login')
+  const result = await resolveContext()
+  if (result.status === 'anonymous') redirect('/login')
+  // A valid session we cannot resolve to a profile must NOT go to /login:
+  // middleware would bounce it straight back here on the strength of the cookie.
+  // /session-invalid is a terminal page whose only exit is signing out.
+  if (result.status === 'orphaned') redirect('/session-invalid')
+  const ctx = result.ctx
   if (!ctx.isActive) redirect('/account-inactive')
   if (ctx.role !== 'super_admin' && ctx.tenant?.status === 'suspended') {
     redirect('/workspace-suspended')
@@ -50,17 +55,29 @@ export async function requireRole(role: AppContext['role']): Promise<AppContext>
   return ctx
 }
 
+/**
+ * The wrong-role case and the no-tenant case cannot share an exit.
+ *
+ * `homeFor(role)` is right for the first — send an employee back to /employee —
+ * but for the second it is the very route that just rejected them, and the guard
+ * would bounce them into it again on the next request. A profile whose tenant
+ * never got provisioned has no portal to go to, so it goes to the dead end.
+ */
+function leaveTenantArea(ctx: AppContext, expected: AppContext['role']): never {
+  redirect(ctx.role === expected ? '/session-invalid' : homeFor(ctx.role))
+}
+
 /** An ACTIVE org user in an ACTIVE tenant. */
 export async function requireOrg(): Promise<OrgContext> {
   const ctx = await requireUser()
-  if (ctx.role !== 'org' || !ctx.tenantId || !ctx.tenant) redirect(homeFor(ctx.role))
+  if (ctx.role !== 'org' || !ctx.tenantId || !ctx.tenant) leaveTenantArea(ctx, 'org')
   return ctx as OrgContext
 }
 
 /** An ACTIVE employee in an ACTIVE tenant. */
 export async function requireEmployee(): Promise<OrgContext> {
   const ctx = await requireUser()
-  if (ctx.role !== 'employee' || !ctx.tenantId || !ctx.tenant) redirect(homeFor(ctx.role))
+  if (ctx.role !== 'employee' || !ctx.tenantId || !ctx.tenant) leaveTenantArea(ctx, 'employee')
   return ctx as OrgContext
 }
 
@@ -73,7 +90,11 @@ export async function requireSuperAdmin(): Promise<AppContext> {
 /** Either role, for pages both portals share (meetings, kanban, notifications). */
 export async function requireTenantUser(): Promise<OrgContext> {
   const ctx = await requireUser()
-  if (!ctx.tenantId || !ctx.tenant) redirect(homeFor(ctx.role))
+  // A super admin has no tenant by design and belongs on /super; anyone else
+  // without one is unprovisioned, and homeFor() would only loop them back here.
+  if (!ctx.tenantId || !ctx.tenant) {
+    redirect(ctx.role === 'super_admin' ? homeFor(ctx.role) : '/session-invalid')
+  }
   return ctx as OrgContext
 }
 
@@ -89,10 +110,14 @@ const deny = (message: string, status: number): { ok: false; response: NextRespo
 })
 
 export async function apiRequireUser(): Promise<Gate<AppContext>> {
-  const ctx = await loadContext()
-  if (!ctx) return deny('Not authenticated', 401)
-  if (!isUsable(ctx)) return deny('This account is no longer active', 403)
-  return { ok: true, ctx }
+  const result = await resolveContext()
+  if (result.status === 'anonymous') return deny('Not authenticated', 401)
+  if (result.status === 'orphaned') {
+    // 403, not 401: the credentials are genuine, the account is unusable.
+    return deny('This account is not fully set up. Please contact your administrator.', 403)
+  }
+  if (!isUsable(result.ctx)) return deny('This account is no longer active', 403)
+  return { ok: true, ctx: result.ctx }
 }
 
 export async function apiRequireOrg(): Promise<Gate<OrgContext>> {

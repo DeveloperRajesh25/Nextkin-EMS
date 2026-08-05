@@ -41,13 +41,27 @@ export interface AppContext {
 }
 
 /**
- * Resolve the caller, or null when there is no valid session.
+ * Three outcomes, kept apart on purpose.
+ *
+ * `anonymous` and `orphaned` used to collapse into a single `null`, and that is
+ * what produced the sign-in redirect loop: an orphaned user was sent to /login,
+ * middleware saw a perfectly valid session cookie and sent them straight back to
+ * their portal, forever. A session that exists but cannot be resolved to a
+ * profile is its OWN failure and needs its own dead end — see /session-invalid.
+ */
+export type ContextResult =
+  | { status: 'anonymous' }
+  | { status: 'orphaned'; userId: string; reason: string }
+  | { status: 'ok'; ctx: AppContext }
+
+/**
+ * Resolve the caller.
  *
  * Returns the context even for a DEACTIVATED user or a SUSPENDED tenant — the
  * callers below are what turn those states into the right redirect, and the UI
  * needs to know which of the two happened to explain itself.
  */
-export async function loadContext(): Promise<AppContext | null> {
+export async function resolveContext(): Promise<ContextResult> {
   const supabase = await createSupabaseServerClient()
 
   const {
@@ -55,20 +69,24 @@ export async function loadContext(): Promise<AppContext | null> {
     error,
   } = await supabase.auth.getUser()
 
-  if (error || !user) return null
+  if (error || !user) return { status: 'anonymous' }
 
   const { data, error: rpcError } = await supabase.rpc('current_profile')
   const row = Array.isArray(data) ? data[0] : data
 
   if (rpcError || !row) {
-    // Authenticated but not yet provisioned — the profile trigger has not landed
-    // (or was applied after this user signed up). Treat as unauthenticated
-    // rather than guessing a role.
+    // Authenticated but not provisioned: the migrations have not been applied to
+    // this database, or the profile trigger landed after this user signed up.
+    // Never guess a role — an unresolvable session gets no access at all.
     console.warn('[auth] no profile row for user', user.id, rpcError?.message)
-    return null
+    return {
+      status: 'orphaned',
+      userId: user.id,
+      reason: rpcError?.message ?? 'no profile row',
+    }
   }
 
-  return {
+  const ctx: AppContext = {
     userId: row.id,
     email: row.email ?? user.email ?? '',
     role: row.role as UserRole,
@@ -92,6 +110,18 @@ export async function loadContext(): Promise<AppContext | null> {
         }
       : null,
   }
+
+  return { status: 'ok', ctx }
+}
+
+/**
+ * Convenience wrapper for callers that only care whether there is a usable
+ * caller. Prefer `resolveContext()` anywhere the answer decides a redirect —
+ * `null` cannot tell "signed out" apart from "session with no profile".
+ */
+export async function loadContext(): Promise<AppContext | null> {
+  const result = await resolveContext()
+  return result.status === 'ok' ? result.ctx : null
 }
 
 /** The landing route for a role — the single source of truth for redirects. */

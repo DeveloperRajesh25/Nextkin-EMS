@@ -16,6 +16,7 @@ import 'server-only'
  */
 import { Resend } from 'resend'
 import { appUrl } from '@/lib/env'
+import { EMPLOYEE_LOGIN_PATH } from '@/lib/routes'
 
 let client: Resend | null = null
 
@@ -171,7 +172,10 @@ export interface CredentialEmailArgs {
  * first login), and the copy says so plainly.
  */
 export async function sendEmployeeCredentials(args: CredentialEmailArgs): Promise<SendResult> {
-  const loginUrl = `${appUrl()}/login`
+  // The EMPLOYEE door. /login is the admin one and would refuse these
+  // credentials outright — with the same message a wrong password gets, which
+  // for a new starter reads as "they sent me a broken password".
+  const loginUrl = `${appUrl()}${EMPLOYEE_LOGIN_PATH}`
   const brand = args.brandColor || '#C41E33'
 
   const html = layout(
@@ -181,7 +185,9 @@ export async function sendEmployeeCredentials(args: CredentialEmailArgs): Promis
     )} account is ready</h1>
     <p style="margin:0 0 18px;">Hi ${esc(args.fullName || 'there')}, an account has been created for you on ${esc(
       args.orgName
-    )}'s employee portal. Sign in with the details below.</p>
+    )}'s employee portal. Sign in at <a href="${loginUrl}" style="color:${brand};font-weight:600;">${esc(
+      loginUrl
+    )}</a> with the details below.</p>
 
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F6F7F9;border:1px solid #E7E9EE;border-radius:12px;margin:0 0 8px;">
       <tr><td style="padding:16px 18px;">

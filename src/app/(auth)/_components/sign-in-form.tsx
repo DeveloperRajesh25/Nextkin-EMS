@@ -9,7 +9,22 @@ import { Input } from '@/components/ui/input'
 import { FormField, FormError, FormSuccess } from '@/components/ui/form-field'
 import { apiPost, ApiClientError } from '@/lib/fetcher'
 
-export function LoginForm() {
+export type Portal = 'org' | 'employee'
+
+interface SignInFormProps {
+  /**
+   * Which door this is. Sent to the server, which refuses the sign-in if the
+   * account's role does not belong to this portal. It is a UX separation, not a
+   * security boundary — the boundary is the role check on the server and RLS
+   * underneath it — so nothing here needs to be secret.
+   */
+  portal: Portal
+  title: string
+  subtitle: string
+  footer?: React.ReactNode
+}
+
+export function SignInForm({ portal, title, subtitle, footer }: SignInFormProps) {
   const router = useRouter()
   const params = useSearchParams()
 
@@ -34,6 +49,7 @@ export function LoginForm() {
       const { redirectTo } = await apiPost<{ redirectTo: string }>('/api/auth/login', {
         email,
         password,
+        portal,
       })
       const next = params.get('next')
       // Only honour a same-origin relative path — an open redirect here would
@@ -54,8 +70,8 @@ export function LoginForm() {
 
   return (
     <div className="card-surface p-7">
-      <h1 className="text-[22px] font-bold tracking-[-0.02em]">Welcome back</h1>
-      <p className="mt-1.5 text-sm text-ink-muted">Sign in to your workspace.</p>
+      <h1 className="text-[22px] font-bold tracking-[-0.02em]">{title}</h1>
+      <p className="mt-1.5 text-sm text-ink-muted">{subtitle}</p>
 
       <form onSubmit={onSubmit} className="mt-6 space-y-4" noValidate>
         {notice ? <FormSuccess message={notice} /> : null}
@@ -110,17 +126,7 @@ export function LoginForm() {
         </Button>
       </form>
 
-      <p className="mt-6 text-center text-sm text-ink-muted">
-        New organization?{' '}
-        <Link href="/signup" className="font-medium text-brand-600 hover:underline">
-          Create a workspace
-        </Link>
-      </p>
-
-      <p className="mt-4 border-t border-line pt-4 text-center text-xs leading-relaxed text-ink-muted">
-        Employees do not sign up here — your organization creates your account and
-        sends your sign-in details.
-      </p>
+      {footer}
     </div>
   )
 }

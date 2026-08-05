@@ -5,6 +5,7 @@ import { resetPasswordSchema } from '@/lib/schemas'
 import { withErrorHandler, parseBody, jsonOk, jsonError } from '@/lib/api'
 import { rateLimit, limitKey, getClientIp } from '@/lib/rate-limit'
 import { audit } from '@/lib/audit'
+import { EMPLOYEE_LOGIN_PATH, ORG_LOGIN_PATH } from '@/lib/routes'
 
 export const dynamic = 'force-dynamic'
 
@@ -38,6 +39,13 @@ async function handlePOST(request: NextRequest) {
 
   const { password } = await parseBody(request, resetPasswordSchema)
 
+  // Read the role while the recovery session is still alive — it decides which
+  // sign-in page to send them back to, and sending an employee to the admin door
+  // means their brand-new password is refused on first use.
+  const { data: profileRows } = await supabase.rpc('current_profile')
+  const profileRow = Array.isArray(profileRows) ? profileRows[0] : profileRows
+  const signInPath = profileRow?.role === 'employee' ? EMPLOYEE_LOGIN_PATH : ORG_LOGIN_PATH
+
   const { error } = await supabase.auth.updateUser({ password })
   if (error) {
     console.error('[reset-password] update failed', error.message)
@@ -63,7 +71,10 @@ async function handlePOST(request: NextRequest) {
 
   await supabase.auth.signOut()
 
-  return jsonOk({ message: 'Your password has been updated. Please sign in.' })
+  return jsonOk({
+    message: 'Your password has been updated. Please sign in.',
+    signInPath,
+  })
 }
 
 export const POST = withErrorHandler(handlePOST)

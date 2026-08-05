@@ -21,6 +21,9 @@ export default function ResetPasswordPage() {
   const [error, setError] = React.useState<string | null>(null)
   const [fields, setFields] = React.useState<Record<string, string>>({})
   const [submitting, setSubmitting] = React.useState(false)
+  // Which sign-in page to offer afterwards. The server decides it from the role
+  // it can still see, and falls back to the admin door if anything is unclear.
+  const [signInPath, setSignInPath] = React.useState('/login')
   const [done, setDone] = React.useState(false)
 
   async function onSubmit(event: React.FormEvent) {
@@ -29,7 +32,11 @@ export default function ResetPasswordPage() {
     setFields({})
     setSubmitting(true)
     try {
-      await apiPost('/api/auth/reset-password', { password, confirmPassword })
+      const result = await apiPost<{ signInPath?: string }>('/api/auth/reset-password', {
+        password,
+        confirmPassword,
+      })
+      if (result?.signInPath?.startsWith('/')) setSignInPath(result.signInPath)
       setDone(true)
     } catch (err) {
       if (err instanceof ApiClientError) {
@@ -51,7 +58,7 @@ export default function ResetPasswordPage() {
         </span>
         <h1 className="text-[22px] font-bold tracking-[-0.02em]">Password updated</h1>
         <p className="mt-2 text-sm text-ink-muted">Sign in with your new password to continue.</p>
-        <Button className="mt-6 w-full" size="lg" onClick={() => router.replace('/login')}>
+        <Button className="mt-6 w-full" size="lg" onClick={() => router.replace(signInPath)}>
           Go to sign in
         </Button>
       </div>

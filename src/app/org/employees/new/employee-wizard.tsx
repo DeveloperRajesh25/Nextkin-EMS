@@ -76,6 +76,7 @@ export function EmployeeWizard({
     email: string
     tempPassword: string
     emailSent: boolean
+    loginUrl: string
   } | null>(null)
 
   function validateStep(index: number): boolean {
@@ -142,7 +143,12 @@ export function EmployeeWizard({
     setError(null)
     setSubmitting(true)
     try {
-      const result = await apiPost<{ email: string; tempPassword: string; emailSent: boolean }>(
+      const result = await apiPost<{
+        email: string
+        tempPassword: string
+        emailSent: boolean
+        loginUrl: string
+      }>(
         '/api/org/employees',
         {
           fullName: fullName.trim(),
@@ -191,6 +197,27 @@ export function EmployeeWizard({
         <div className="mt-6 space-y-3 rounded-xl border border-line bg-page p-4 text-left">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-wider text-ink-muted">
+              Sign-in page
+            </p>
+            <div className="mt-1 flex items-center gap-2">
+              <code className="flex-1 break-all rounded-lg border border-line bg-card px-3 py-2 font-mono text-[13px] font-medium">
+                {created.loginUrl}
+              </code>
+              <Button
+                variant="secondary"
+                size="icon"
+                aria-label="Copy sign-in link"
+                onClick={() => {
+                  navigator.clipboard.writeText(created.loginUrl)
+                  toast.success('Copied')
+                }}
+              >
+                <Copy />
+              </Button>
+            </div>
+          </div>
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-ink-muted">
               Email
             </p>
             <p className="mt-0.5 break-all text-sm font-medium">{created.email}</p>
@@ -219,8 +246,9 @@ export function EmployeeWizard({
         </div>
 
         <p className="mt-4 text-xs leading-relaxed text-ink-muted">
-          They will be asked to choose their own password the first time they sign in. This
-          temporary one is not stored anywhere and cannot be shown again.
+          These details work on the employee sign-in page above — not on the administrator
+          sign-in you use. They will be asked to choose their own password the first time they
+          sign in; this temporary one is not stored anywhere and cannot be shown again.
         </p>
 
         <div className="mt-6 flex flex-col gap-2 sm:flex-row">

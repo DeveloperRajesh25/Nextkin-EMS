@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import { redirect } from 'next/navigation'
 import { KeyRound } from 'lucide-react'
-import { loadContext } from '@/lib/auth/context'
+import { resolveContext } from '@/lib/auth/context'
 import { ChangePasswordForm } from './change-password-form'
 
 export const metadata: Metadata = { title: 'Change password' }
@@ -17,8 +17,10 @@ export const dynamic = 'force-dynamic'
  * flag is set, which would loop. It resolves the context directly instead.
  */
 export default async function ChangePasswordPage() {
-  const ctx = await loadContext()
-  if (!ctx) redirect('/login')
+  const result = await resolveContext()
+  if (result.status === 'anonymous') redirect('/login')
+  if (result.status === 'orphaned') redirect('/session-invalid')
+  const ctx = result.ctx
   if (!ctx.isActive) redirect('/account-inactive')
 
   const forced = ctx.mustChangePassword

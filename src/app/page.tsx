@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation'
-import { loadContext, homeFor } from '@/lib/auth/context'
+import { resolveContext, homeFor } from '@/lib/auth/context'
 
 export const dynamic = 'force-dynamic'
 
@@ -8,8 +8,10 @@ export const dynamic = 'force-dynamic'
  * go to their portal, everyone else to sign-in.
  */
 export default async function RootPage() {
-  const ctx = await loadContext()
-  if (!ctx) redirect('/login')
+  const result = await resolveContext()
+  if (result.status === 'anonymous') redirect('/login')
+  if (result.status === 'orphaned') redirect('/session-invalid')
+  const ctx = result.ctx
   if (!ctx.isActive) redirect('/account-inactive')
   if (ctx.role !== 'super_admin' && ctx.tenant?.status === 'suspended') {
     redirect('/workspace-suspended')

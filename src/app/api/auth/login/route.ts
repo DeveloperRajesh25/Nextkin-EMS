@@ -34,7 +34,7 @@ async function handlePOST(request: NextRequest) {
     return jsonError('Too many sign-in attempts. Please wait a few minutes.', 429)
   }
 
-  const { email, password } = await parseBody(request, loginSchema)
+  const { email, password, portal } = await parseBody(request, loginSchema)
 
   if (await isLoginLocked(email)) {
     return jsonError(
@@ -60,23 +60,60 @@ async function handlePOST(request: NextRequest) {
     return jsonError('Those details did not match. Please check and try again.', 401)
   }
 
-  await clearLoginFailures(email)
+  // NOT cleared yet. The counter is reset only once the sign-in has fully
+  // succeeded, so hammering one portal with the other's credentials still spends
+  // the lockout budget instead of resetting it on every attempt.
 
   // Resolve the landing route from the profile, not from the request.
-  const { data: profileRows } = await supabase.rpc('current_profile')
+  const { data: profileRows, error: profileError } = await supabase.rpc('current_profile')
   const profile = Array.isArray(profileRows) ? profileRows[0] : profileRows
 
-  if (profile && !profile.is_active) {
+  // FAIL CLOSED. Every check below is written `profile.x`, so a missing profile
+  // used to skip all of them and hand out a default `employee` landing route —
+  // credentials verified, authorization never evaluated. Refuse the session
+  // instead, and drop the cookie so the browser is not left half signed-in.
+  if (profileError || !profile) {
+    console.error('[auth] login: no profile for', data.user.id, profileError?.message)
+    await supabase.auth.signOut()
+    return jsonError(
+      'This account is not fully set up yet. Please contact your administrator.',
+      403
+    )
+  }
+
+  // --- The portal the request came from must match the account's role -------
+  // Same message and same status as a wrong password, on purpose: "correct
+  // password, wrong door" would otherwise tell an attacker both that the address
+  // is registered AND which kind of account it is. The failure is also recorded
+  // like any other, so probing one door with the other's credentials still
+  // spends the lockout budget.
+  const allowedRoles = portal === 'employee' ? ['employee'] : ['org', 'super_admin']
+  if (!allowedRoles.includes(profile.role)) {
+    await supabase.auth.signOut()
+    await recordLoginFailure(email)
+    await audit({
+      actorId: data.user.id,
+      action: 'auth.login_failed',
+      entity: 'auth.users',
+      meta: { reason: 'wrong_portal', portal },
+      request,
+    })
+    return jsonError('Those details did not match. Please check and try again.', 401)
+  }
+
+  if (!profile.is_active) {
     await supabase.auth.signOut()
     return jsonError('This account has been deactivated. Please contact your administrator.', 403)
   }
-  if (profile && profile.role !== 'super_admin' && profile.tenant_status === 'suspended') {
+  if (profile.role !== 'super_admin' && profile.tenant_status === 'suspended') {
     await supabase.auth.signOut()
     return jsonError('This workspace is suspended. Please contact support.', 403)
   }
 
+  await clearLoginFailures(email)
+
   await audit({
-    tenantId: profile?.tenant_id ?? null,
+    tenantId: profile.tenant_id ?? null,
     actorId: data.user.id,
     actorEmail: data.user.email ?? null,
     action: 'auth.login',
@@ -85,9 +122,9 @@ async function handlePOST(request: NextRequest) {
     request,
   })
 
-  const redirectTo = profile?.must_change_password
+  const redirectTo = profile.must_change_password
     ? '/change-password'
-    : homeFor(profile?.role ?? 'employee')
+    : homeFor(profile.role)
 
   return jsonOk({ redirectTo })
 }

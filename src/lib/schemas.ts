@@ -60,6 +60,11 @@ export type SignupInput = z.infer<typeof signupSchema>
 export const loginSchema = z.object({
   email: emailSchema,
   password: z.string().min(1, 'Enter your password').max(128),
+  // Which sign-in page the request came from. The server refuses an account
+  // whose role does not belong to that portal. Defaulted so an older client (or
+  // a curl) still works, and defaulted to the ADMIN door because that is the
+  // stricter of the two — an employee cannot slip in by omitting the field.
+  portal: z.enum(['org', 'employee']).default('org'),
 })
 
 export const forgotPasswordSchema = z.object({ email: emailSchema })

@@ -58,6 +58,16 @@ Run, confirm it succeeds, then move to the next.
 | 3 | `003_auth_hook_and_triggers.sql` | The access-token hook and the two provisioning triggers |
 | 4 | `004_cron.sql` | **Optional** — in-database scheduling with pg_cron. Skip if using GitHub Actions or Vercel Cron (§10) |
 | 5 | `005_seed.sql` | Super admin + two demo tenants for the isolation test |
+| 6 | `006_backfill_missing_profiles.sql` | Repairs accounts that signed up before `003` was applied |
+| 7 | `007_fix_employee_provisioning.sql` | **Required.** Closes the escalation described below and repairs accounts it already affected |
+
+`007` is not optional. `admin.createUser({ app_metadata })` writes the auth row
+*first* and the metadata *second*, so the `AFTER INSERT` trigger from `003` ran
+before `app_role` existed, defaulted every admin-created employee to `org`, and
+provisioned each of them a workspace of their own. `007` makes provisioning
+require positive evidence of a self-signup, adds an `AFTER UPDATE` trigger that
+adopts the role whenever the metadata lands, and puts the affected employees back
+in the tenant that hired them.
 
 **Do not reorder them.** `002` creates helper functions that `003`'s policies
 rely on, and `005` depends on the provisioning trigger from `003` existing —
@@ -617,14 +627,37 @@ top of `002_rls.sql`.
 The access-token hook is writing to the reserved `role` claim. It must write
 `user_role`. Re-apply `003_auth_hook_and_triggers.sql`.
 
+**`Could not find the function public.current_profile ... in the schema cache`**
+The migrations in §2 have not been applied to the project this deployment points
+at. Sign-in itself succeeds — Supabase Auth is a separate schema — and then every
+page refuses the caller because no profile exists, which is why it surfaces as a
+sign-in that lands on an "account not set up" page rather than as a database
+error. Run `001`–`003`, then `006_backfill_missing_profiles.sql` to give the
+accounts that signed up in the meantime their profile and workspace.
+
+**Someone signed up while the triggers were missing and is now locked out**
+Their `auth.users` row exists and their profile never will — `on_auth_user_created`
+fires on INSERT only. Run `006_backfill_missing_profiles.sql`; it is idempotent
+and lists anything it could not repair.
+
 **Signup succeeds but the user has no tenant**
 The provisioning trigger did not run. Confirm
 `on_profile_created_provision_tenant` exists on `public.profiles`, then check
 the Postgres logs for the trigger's exception.
 
 **Employees are each getting their own tenant**
-The provisioning trigger is missing its guard. It must return early unless
-`new.role = 'org' AND new.tenant_id IS NULL`. Re-apply `003`.
+`007` has not been applied. The guard in `003` returns early unless
+`new.role = 'org' AND new.tenant_id IS NULL`, which looks sufficient but is not:
+at `AFTER INSERT` time an admin-created employee still reads as `role = 'org'`
+with no tenant, because GoTrue applies `app_metadata` in a second write. Apply
+`007_fix_employee_provisioning.sql` — it also repairs the existing rows.
+
+**An employee's credentials are refused on the sign-in page**
+There are two doors. Employees sign in at `/employee-login`; `/login` is for
+organization owners and platform admins, and refuses an employee with the same
+message a wrong password gets (telling them apart would leak which addresses are
+registered and what kind of account they are). The credentials email and the
+"employee created" screen both quote `/employee-login`.
 
 **Confirmation link fails with a `code_verifier` error**
 The email template is still the default. See §4c.

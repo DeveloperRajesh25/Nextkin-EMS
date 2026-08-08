@@ -5,8 +5,8 @@
 --
 -- THIS FILE IS OPTIONAL. Pick ONE scheduler:
 --   (a) pg_cron (this file) — nothing outside Supabase to configure.
---   (b) GitHub Actions / Vercel Cron — see SETUP.md §7. Recommended if you want
---       a red build when a job fails.
+--   (b) cron-job.org / Vercel Cron — see SETUP.md §10. Recommended if you want
+--       an external scheduler that sees the HTTP status and alerts on failure.
 -- Running both just double-fires the jobs; that is harmless (the visa engine is
 -- idempotent via UNIQUE(work_auth_id, milestone)) but wasteful.
 --

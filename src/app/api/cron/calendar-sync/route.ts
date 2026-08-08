@@ -121,7 +121,7 @@ async function handlePOST(request: NextRequest) {
     await recordCronRun('calendar-sync', false, durationMs, { fatal: message })
     console.error('[cron/calendar-sync] fatal', err)
 
-    // 500 so `curl -fsS` fails the scheduler loudly (§8).
+    // 500 so the external scheduler records a failed run and notifies (§8).
     return Response.json({ error: 'Calendar sync run failed', detail: message }, { status: 500 })
   }
 }

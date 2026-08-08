@@ -182,8 +182,9 @@ async function handlePOST(request: NextRequest) {
     await recordCronRun('visa-reminders', false, durationMs, { fatal: message })
     console.error('[cron/visa-reminders] fatal', err)
 
-    // 500 on purpose. `curl -fsS` turns this into a loud, red scheduler failure
-    // instead of a silently-green job that has not worked for a month (§8).
+    // 500 on purpose. An external scheduler (cron-job.org) turns this into a
+    // failed run and a notification, instead of a silently-green job that has
+    // not worked for a month (§8).
     return Response.json({ error: 'Visa reminder run failed', detail: message }, { status: 500 })
   }
 }

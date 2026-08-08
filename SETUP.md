@@ -56,7 +56,7 @@ Run, confirm it succeeds, then move to the next.
 | 1 | `001_schema.sql` | Tables, enums, indexes, the rate-limit and cron-run ledgers |
 | 2 | `002_rls.sql` | Enables RLS on every table, creates the `SECURITY DEFINER` helpers and all policies |
 | 3 | `003_auth_hook_and_triggers.sql` | The access-token hook and the two provisioning triggers |
-| 4 | `004_cron.sql` | **Optional** — in-database scheduling with pg_cron. Skip if using GitHub Actions or Vercel Cron (§10) |
+| 4 | `004_cron.sql` | **Optional** — in-database scheduling with pg_cron. Skip if using cron-job.org or Vercel Cron (§10) |
 | 5 | `005_seed.sql` | Super admin + two demo tenants for the isolation test |
 | 6 | `006_backfill_missing_profiles.sql` | Repairs accounts that signed up before `003` was applied |
 | 7 | `007_fix_employee_provisioning.sql` | **Required.** Closes the escalation described below and repairs accounts it already affected |
@@ -432,20 +432,53 @@ npm run build           # production build
 Pick **one** of the three. Running two just double-fires the jobs — harmless,
 because the visa engine is idempotent, but wasteful.
 
-### Option A — GitHub Actions (recommended)
+### Option A — cron-job.org (recommended)
 
-`.github/workflows/cron.yml` is already in the repo. Add two repository secrets
-under **Settings → Secrets and variables → Actions**:
+Sign up at [cron-job.org](https://cron-job.org), then create **two** jobs. Both
+use the same settings apart from the URL and the schedule:
 
-- `APP_URL` — `https://your-domain.com`
-- `CRON_SECRET` — the same value as in Vercel
+| Setting | Visa reminders | Calendar sync fallback |
+| --- | --- | --- |
+| URL | `https://your-domain.com/api/cron/visa-reminders` | `https://your-domain.com/api/cron/calendar-sync` |
+| Schedule | Daily at **03:30 UTC** | Every **15 minutes** |
+| Request method | `POST` | `POST` |
+| Header | `x-cron-secret: <your CRON_SECRET>` | `x-cron-secret: <your CRON_SECRET>` |
+| Save responses | on | on |
 
-> **Why this is the recommendation.** Every step uses `curl -fsS`. The `-f` is
-> the entire point: it makes curl **exit non-zero on any HTTP ≥ 400**, so the
-> workflow turns red. Without it, curl reports success after receiving a 500 and
-> the job shows green while the visa engine has not run for a month. A cron job
-> that fails silently is worse than no cron job, because you believe it is
-> working. Do not replace `-f` with `-v`.
+For each job:
+
+1. **Common → Title** — name it, e.g. `EMS visa reminders`.
+2. **Common → Execution schedule** — pick the schedule above. cron-job.org
+   schedules in the timezone selected on the job, so either set the job's
+   timezone to UTC and use `03:30`, or leave it in your own timezone and convert.
+   The endpoint recomputes the day difference in **each tenant's** timezone, so
+   one daily run serves every timezone — you do not need a job per tenant.
+3. **Advanced → Request method** — `POST`.
+4. **Advanced → Headers** — add `x-cron-secret` with your `CRON_SECRET` value
+   (the same one set in Vercel). This is the only thing authenticating the job;
+   without it the endpoint answers 401.
+5. **Advanced → Save responses in job history** — enable it, so a failed run
+   shows you the actual error body.
+6. **Notifications** — enable *failure* notifications for both jobs.
+
+> **Why the notifications and the response history matter.** These endpoints
+> answer **500 on a fatal failure** on purpose, so a scheduler treats it as a
+> real failure instead of showing a green tick. cron-job.org only turns a run red
+> if you let it see the status — leave failure notifications on, or the visa
+> engine can stop working for a month while the job list looks healthy. A cron
+> job that fails silently is worse than no cron job, because you believe it is
+> working.
+>
+> A run can also answer **200 with a non-empty `errors` array**: the run worked,
+> but some tenants failed. That is deliberate — one bad tenant should not cause a
+> retry of everything — and it is why saved responses are worth the setting.
+> `/super/system` records every run either way.
+
+Free-tier note: cron-job.org waits up to 30 seconds for a response and aborts
+after that. Both handlers set `maxDuration = 60`, so a slow run may be marked
+failed on the scheduler side even though it completed server-side. Check
+`/super/system` before trusting a timeout, and enable the paid longer timeout if
+your tenant count grows.
 
 ### Option B — Vercel Cron
 
@@ -680,7 +713,7 @@ be decrypted — rotating that key requires reconnecting every calendar.
 **Cron endpoints answer 503**
 `CRON_SECRET` is unset or shorter than 16 characters. It is a 503 rather than a
 401 on purpose: the job is not misauthenticated, the *server* is misconfigured,
-and `curl -fsS` turns that into a loud failure.
+and an external scheduler surfaces that as a failed run rather than a silent no-op.
 
 **Visa reminders never send**
 Check `/super/system` first — it shows whether the job ran at all. If it ran but

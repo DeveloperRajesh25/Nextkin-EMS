@@ -172,7 +172,7 @@ export async function requireCron(request: Request, job: string): Promise<NextRe
   const configured = process.env.CRON_SECRET
   if (!configured || configured.length < 16) {
     // 503, not 401: the job is not misauthenticated, the server is misconfigured.
-    // A scheduler using `curl -fsS` turns this into a loud red failure.
+    // An external scheduler surfaces this as a failed run, not a silent no-op.
     return NextResponse.json({ error: 'Cron is not configured' }, { status: 503 })
   }
 

@@ -190,5 +190,5 @@ async function handlePOST(request: NextRequest) {
 }
 
 export const POST = withErrorHandler(handlePOST)
-/** GET is accepted so Vercel Cron (which issues GETs) can drive the same job. */
+/** GET runs the same job, for a browser/curl check with the header set. */
 export const GET = withErrorHandler(handlePOST)

@@ -56,7 +56,7 @@ Run, confirm it succeeds, then move to the next.
 | 1 | `001_schema.sql` | Tables, enums, indexes, the rate-limit and cron-run ledgers |
 | 2 | `002_rls.sql` | Enables RLS on every table, creates the `SECURITY DEFINER` helpers and all policies |
 | 3 | `003_auth_hook_and_triggers.sql` | The access-token hook and the two provisioning triggers |
-| 4 | `004_cron.sql` | **Optional** — in-database scheduling with pg_cron. Skip if using cron-job.org or Vercel Cron (§10) |
+| 4 | `004_cron.sql` | Removes the old in-database pg_cron schedules. Scheduling is external now — cron-job.org only (§10). No-op on a fresh database |
 | 5 | `005_seed.sql` | Super admin + two demo tenants for the isolation test |
 | 6 | `006_backfill_missing_profiles.sql` | Repairs accounts that signed up before `003` was applied |
 | 7 | `007_fix_employee_provisioning.sql` | **Required.** Closes the escalation described below and repairs accounts it already affected |
@@ -429,10 +429,11 @@ npm run build           # production build
 
 ## 10. Schedule the background jobs
 
-Pick **one** of the three. Running two just double-fires the jobs — harmless,
-because the visa engine is idempotent, but wasteful.
-
-### Option A — cron-job.org (recommended)
+Scheduling is external and there is exactly one supported scheduler:
+**cron-job.org**. Vercel Cron and pg_cron are deliberately not used — Vercel's
+Hobby plan only allows one run per day (too infrequent for the calendar
+fallback), and pg_net is fire-and-forget, so a 500 from the app would show up as
+a green run.
 
 Sign up at [cron-job.org](https://cron-job.org), then create **two** jobs. Both
 use the same settings apart from the URL and the schedule:
@@ -480,33 +481,15 @@ failed on the scheduler side even though it completed server-side. Check
 `/super/system` before trusting a timeout, and enable the paid longer timeout if
 your tenant count grows.
 
-### Option B — Vercel Cron
+### Upgrading from an earlier setup
 
-`vercel.json` already declares both schedules. Vercel sends the `CRON_SECRET`
-automatically as an `Authorization` header — but this app expects
-`x-cron-secret`, so if you use Vercel Cron, add a `CRON_SECRET` environment
-variable and verify the jobs appear under **Project → Settings → Cron Jobs**
-after deploying. Note that Vercel Cron on Hobby is limited to once per day,
-which is too infrequent for the calendar fallback.
+If you previously scheduled these jobs with Vercel Cron or pg_cron, both are
+gone: `vercel.json` no longer declares any `crons`, and running the current
+`004_cron.sql` unschedules `ems-visa-reminders`, `ems-calendar-sync` and
+`ems-cron-monitor` and drops their helper functions. Redeploy and run `004`
+once, or the jobs double-fire.
 
-### Option C — pg_cron, inside Postgres
-
-Run `004_cron.sql`, then store the two secrets in Supabase Vault:
-
-```sql
-select vault.create_secret('https://your-domain.com', 'ems_app_url',
-                           'NextKinLife EMS base URL (no trailing slash)');
-select vault.create_secret('<your CRON_SECRET>', 'ems_cron_secret',
-                           'x-cron-secret header value');
-```
-
-`004_cron.sql` also schedules `ems-cron-monitor`, which exists because pg_net is
-fire-and-forget: `net.http_post` returns immediately and a 500 from the app
-lands quietly in `net._http_response`, so `cron.job_run_details` would show
-success. The monitor reads those responses back, records every non-2xx in
-`public.cron_runs`, and raises a warning into the Postgres log.
-
-### Verify, whichever you chose
+### Verify
 
 Sign in as the super admin and open **/super/system**. Every run — success or
 failure — is recorded there, so "the visa engine has not run in six days" is

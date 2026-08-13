@@ -14,7 +14,8 @@ let idCounter = 0
  * on the field rather than leaving it as visual-only red text.
  */
 export interface FormFieldProps {
-  label: string
+  /** Usually a string; a node when the label carries a badge (e.g. "Admin only"). */
+  label: React.ReactNode
   htmlFor?: string
   error?: string | null
   hint?: string

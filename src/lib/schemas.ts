@@ -116,7 +116,7 @@ export const departmentSchema = z.object({
 })
 
 // ---------------------------------------------------------------------------
-// Employees — the three wizard steps, composed into one payload
+// Employees — editing an existing account
 // ---------------------------------------------------------------------------
 
 export const employeeStep1Schema = z.object({
@@ -134,25 +134,242 @@ export const employeeStep2Schema = z.object({
   timezone: z.string().trim().min(3).max(64).default('Asia/Kolkata'),
 })
 
-export const employeeDocumentSchema = z.object({
-  key: z.string().trim().min(1).max(300),
-  fileName: z.string().trim().min(1).max(255),
-  mimeType: z.string().trim().max(160).optional(),
-  sizeBytes: z.number().int().nonnegative().optional(),
-})
-
-export const createEmployeeSchema = employeeStep1Schema
-  .merge(employeeStep2Schema)
-  .extend({
-    documents: z.array(employeeDocumentSchema).max(10).default([]),
-    sendCredentialsEmail: z.boolean().default(true),
-  })
-export type CreateEmployeeInput = z.infer<typeof createEmployeeSchema>
-
+// Account CREATION now runs through the onboarding wizard below — there is one
+// path to a new employee account, and it is the one that validates six steps
+// and rolls back. What remains here is the EDIT contract for an existing
+// employee (/api/org/employees/[id]).
 export const updateEmployeeSchema = employeeStep1Schema
   .omit({ email: true })
   .merge(employeeStep2Schema)
   .extend({ isActive: z.boolean().optional() })
+
+// ---------------------------------------------------------------------------
+// Employee onboarding — the six-step wizard
+//
+// TWO CONTRACTS PER STEP, and the split is the whole design:
+//
+//   • `onboardingDraftSchema`  — everything optional. This is what "Save for
+//     later" and the 30-second autosave post. A draft is by definition
+//     incomplete, so requiring anything here would make the feature impossible.
+//   • `onboardingStepNSchema` — the REQUIRED fields for that step. Run by the
+//     client on "Next" (a courtesy) and by the server on "Complete Onboarding"
+//     (the control). Completion re-validates all six, so a draft edited past the
+//     UI — or a stale tab — still cannot mint a half-populated account.
+//
+// Field names are camelCase throughout and mapped to the snake_case columns in
+// one place (src/lib/onboarding.ts), so the wire format never leaks the schema.
+// ---------------------------------------------------------------------------
+
+/**
+ * A free-text draft field.
+ *
+ * `''` and `null` mean CLEAR IT; a key that was never sent means LEAVE IT
+ * ALONE, and must therefore stay `undefined` all the way through — a transform
+ * that folded undefined into null would make every partial save rewrite the
+ * whole row, quietly wiping the five steps the caller did not touch.
+ */
+const draftText = (max: number) =>
+  z
+    .string()
+    .trim()
+    .max(max)
+    .nullish()
+    .transform((v) => (v === undefined ? undefined : v || null))
+
+const draftDate = z
+  .union([isoDate, z.literal('')])
+  .nullish()
+  .transform((v) => (v === undefined ? undefined : v || null))
+
+/** The same undefined-preserving rule for an id that may be cleared. */
+const draftUuid = uuid.nullish().transform((v) => (v === undefined ? undefined : (v ?? null)))
+
+export const WORK_AUTH_STATUSES = [
+  'US Citizen',
+  'Permanent Resident',
+  'H-1B',
+  'L-1',
+  'EAD',
+  'OPT',
+  'Other Visa',
+  'Not Applicable',
+] as const
+
+/** The statuses that carry no visa paperwork — step 2 hides its detail fields. */
+export const NON_VISA_STATUSES: readonly string[] = [
+  'US Citizen',
+  'Permanent Resident',
+  'Not Applicable',
+]
+
+export const GENDERS = ['Male', 'Female', 'Non-binary', 'Prefer not to say'] as const
+export const PRONOUNS = ['He/Him', 'She/Her', 'They/Them', 'Other'] as const
+export const EMPLOYMENT_STATUSES = ['Active', 'Probation', 'Leave of Absence'] as const
+export const PAY_TYPES = ['Hourly', 'Salaried'] as const
+export const PAY_FREQUENCIES = ['Weekly', 'Bi-weekly', 'Semi-monthly', 'Monthly'] as const
+export const EMPLOYMENT_TYPES = ['Full-time', 'Part-time', 'Contract', 'Intern'] as const
+export const ACCOUNT_TYPES = ['Checking', 'Savings'] as const
+export const ID_PROOF_TYPES = ['Passport', "Driver's License", 'National ID', 'Other'] as const
+
+export const additionalDocSchema = z.object({
+  key: z.string().trim().min(1).max(300),
+  fileName: z.string().trim().min(1).max(255),
+  label: z.string().trim().max(120).nullish().transform((v) => (v ? v : null)),
+  sizeBytes: z.number().int().nonnegative().optional(),
+})
+export type AdditionalDoc = z.infer<typeof additionalDocSchema>
+
+/**
+ * A partial save. Every key optional, so a PATCH carries only what changed and
+ * an untouched step is never overwritten with nulls.
+ */
+export const onboardingDraftSchema = z.object({
+  // Step 1
+  firstName: draftText(80),
+  middleName: draftText(80),
+  lastName: draftText(80),
+  dateOfBirth: draftDate,
+  gender: draftText(40),
+  preferredFirstName: draftText(80),
+  preferredLastName: draftText(80),
+  pronouns: draftText(40),
+  streetAddress: draftText(200),
+  apartment: draftText(80),
+  city: draftText(80),
+  stateProvince: draftText(80),
+  zipPostal: draftText(20),
+  country: draftText(80),
+  phone: draftText(32),
+  homePhone: draftText(32),
+  personalEmail: draftText(254),
+  internalNotes: draftText(4000),
+
+  // Step 2
+  workAuthStatus: draftText(40),
+  visaType: draftText(40),
+  visaNumber: draftText(80),
+  visaStartDate: draftDate,
+  visaExpiryDate: draftDate,
+  authDocumentUrl: draftText(300),
+
+  // Step 3
+  workPhone: draftText(32),
+  workEmail: draftText(254),
+  hireDate: draftDate,
+  employmentStatus: draftText(40),
+  employeeCode: draftText(40),
+  departmentId: draftUuid,
+  designation: draftText(80),
+  reportingManagerId: draftUuid,
+
+  // Step 4. `accountNumber` is PLAINTEXT and lives only for the length of the
+  // request — the handler encrypts it into `account_number_enc` and it is never
+  // read back to a browser (only its last four digits are).
+  payType: draftText(20),
+  payRate: z
+    .coerce.number()
+    .min(0)
+    .max(1_000_000_000)
+    .nullish()
+    .transform((v) => (v === undefined ? undefined : (v ?? null))),
+  payFrequency: draftText(30),
+  employmentType: draftText(30),
+  bankName: draftText(120),
+  accountHolderName: draftText(120),
+  accountNumber: z
+    .string()
+    .trim()
+    .max(40)
+    .regex(/^[0-9A-Za-z-]*$/, 'Use digits and letters only')
+    .nullish()
+    .transform((v) => (v === undefined ? undefined : v || null)),
+  routingCode: draftText(40),
+  accountType: draftText(20),
+  emergencyContactName: draftText(120),
+  emergencyRelationship: draftText(80),
+  emergencyPhone: draftText(32),
+  emergencyEmail: draftText(254),
+
+  // Step 5
+  photoUrl: draftText(300),
+  resumeUrl: draftText(300),
+  offerLetterUrl: draftText(300),
+  idProofType: draftText(40),
+  idProofUrl: draftText(300),
+  additionalDocs: z.array(additionalDocSchema).max(15).optional(),
+  complianceNotes: draftText(4000),
+
+  // Wizard state
+  currentStep: z.coerce.number().int().min(1).max(6).optional(),
+  completedSteps: z.array(z.coerce.number().int().min(1).max(6)).max(6).optional(),
+})
+export type OnboardingDraftInput = z.infer<typeof onboardingDraftSchema>
+
+const requiredText = (label: string, max: number) =>
+  z.string({ required_error: label }).trim().min(1, label).max(max)
+
+/** Step 1 — legal identity, address and the login email. */
+export const onboardingStep1Schema = z.object({
+  firstName: requiredText('Enter their first name', 80),
+  lastName: requiredText('Enter their last name', 80),
+  dateOfBirth: isoDate,
+  gender: z.enum(GENDERS, { errorMap: () => ({ message: 'Choose an option' }) }),
+  streetAddress: requiredText('Enter the street address', 200),
+  city: requiredText('Enter the city', 80),
+  stateProvince: requiredText('Enter the state or province', 80),
+  zipPostal: requiredText('Enter the ZIP or postal code', 20),
+  country: requiredText('Choose a country', 80),
+  phone: requiredText('Enter a phone number', 32),
+  personalEmail: emailSchema,
+})
+
+/** Step 2 — status is required; the visa detail behind it is not. */
+export const onboardingStep2Schema = z.object({
+  workAuthStatus: z.enum(WORK_AUTH_STATUSES, {
+    errorMap: () => ({ message: 'Choose a work authorization status' }),
+  }),
+})
+
+/** Step 3 — the employment facts the rest of the app keys off. */
+export const onboardingStep3Schema = z.object({
+  hireDate: isoDate,
+  employmentStatus: z.enum(EMPLOYMENT_STATUSES, {
+    errorMap: () => ({ message: 'Choose an employment status' }),
+  }),
+  departmentId: uuid,
+  designation: requiredText('Enter a job title', 80),
+})
+
+/** Step 4 — pay and the emergency contact. Bank details stay optional. */
+export const onboardingStep4Schema = z.object({
+  payType: z.enum(PAY_TYPES, { errorMap: () => ({ message: 'Choose a pay type' }) }),
+  payRate: z.coerce.number({ invalid_type_error: 'Enter an amount' }).min(0, 'Enter an amount'),
+  payFrequency: z.enum(PAY_FREQUENCIES, {
+    errorMap: () => ({ message: 'Choose a pay frequency' }),
+  }),
+  employmentType: z.enum(EMPLOYMENT_TYPES, {
+    errorMap: () => ({ message: 'Choose an employment type' }),
+  }),
+  emergencyContactName: requiredText('Enter a contact name', 120),
+  emergencyRelationship: requiredText('Enter the relationship', 80),
+  emergencyPhone: requiredText('Enter a phone number', 32),
+})
+
+/** Step 5 — documents are all optional; nothing here blocks completion. */
+export const onboardingStep5Schema = z.object({})
+
+export const ONBOARDING_STEP_SCHEMAS = [
+  onboardingStep1Schema,
+  onboardingStep2Schema,
+  onboardingStep3Schema,
+  onboardingStep4Schema,
+  onboardingStep5Schema,
+] as const
+
+/** Send the credential email? The only choice completion asks for. */
+export const completeOnboardingSchema = z.object({
+  sendCredentialsEmail: z.boolean().default(true),
+})
 
 // ---------------------------------------------------------------------------
 // Attendance

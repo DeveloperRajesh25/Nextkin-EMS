@@ -12,10 +12,12 @@ import {
   Avatar, AvatarFallback, AvatarImage,
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
+  Tabs, TabsList, TabsTrigger, TabsContent,
 } from '@/components/ui/primitives'
 import { apiDelete, apiPatch, ApiClientError } from '@/lib/fetcher'
 import { formatLocal } from '@/lib/time'
 import { initials } from '@/lib/utils'
+import { DraftList, type DraftRow } from './draft-list'
 
 interface EmployeeRow {
   id: string
@@ -31,13 +33,16 @@ interface EmployeeRow {
 }
 
 export function EmployeeList({
-  employees, departments, timezone,
+  employees, departments, drafts, initialTab, timezone,
 }: {
   employees: EmployeeRow[]
   departments: { id: string; name: string }[]
+  drafts: DraftRow[]
+  initialTab: 'team' | 'drafts'
   timezone: string
 }) {
   const router = useRouter()
+  const [tab, setTab] = React.useState<string>(initialTab)
   const [query, setQuery] = React.useState('')
   const [department, setDepartment] = React.useState('all')
   const [status, setStatus] = React.useState('active')
@@ -178,7 +183,20 @@ export function EmployeeList({
   const activeCount = employees.filter((e) => e.is_active).length
 
   return (
-    <div className="space-y-4">
+    <Tabs value={tab} onValueChange={setTab} className="space-y-4">
+      <TabsList>
+        <TabsTrigger value="team">Team ({employees.length})</TabsTrigger>
+        <TabsTrigger value="drafts">
+          Drafts
+          {drafts.length ? (
+            <span className="ml-2 rounded-full bg-brand-600 px-1.5 py-0.5 text-[11px] font-semibold text-white">
+              {drafts.length}
+            </span>
+          ) : null}
+        </TabsTrigger>
+      </TabsList>
+
+      <TabsContent value="team" className="space-y-4 focus-visible:outline-none">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="relative flex-1">
           <Search
@@ -230,7 +248,7 @@ export function EmployeeList({
               description="Add your team and each person gets an account with sign-in details sent to their email."
               action={
                 <Button asChild>
-                  <Link href="/org/employees/new">Add your first employee</Link>
+                  <Link href="/org/employees/onboard">Add your first employee</Link>
                 </Button>
               }
             />
@@ -243,6 +261,11 @@ export function EmployeeList({
           )
         }
       />
+      </TabsContent>
+
+      <TabsContent value="drafts" className="focus-visible:outline-none">
+        <DraftList drafts={drafts} timezone={timezone} />
+      </TabsContent>
 
       <Dialog open={!!pending} onOpenChange={(open) => !open && setPending(null)}>
         <DialogContent size="sm">
@@ -275,6 +298,6 @@ export function EmployeeList({
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </Tabs>
   )
 }

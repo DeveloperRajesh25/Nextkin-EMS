@@ -75,7 +75,7 @@ export default async function OrgDashboard() {
         description={`Here is what is happening at ${ctx.tenant.name} today.`}
         actions={
           <Button asChild>
-            <Link href="/org/employees/new">
+            <Link href="/org/employees/onboard">
               <UserPlus />
               Add employee
             </Link>
@@ -173,7 +173,7 @@ export default async function OrgDashboard() {
               description="Create accounts for your team and they will receive sign-in details by email."
               action={
                 <Button asChild size="sm">
-                  <Link href="/org/employees/new">Add your first employee</Link>
+                  <Link href="/org/employees/onboard">Add your first employee</Link>
                 </Button>
               }
             />

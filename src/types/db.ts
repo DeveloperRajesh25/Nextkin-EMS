@@ -31,7 +31,7 @@ export interface Tenant {
   updated_at: string
 }
 
-export interface Profile {
+export interface Profile extends Partial<ProfileOnboardingFields> {
   id: string
   tenant_id: string | null
   role: UserRole
@@ -46,6 +46,92 @@ export interface Profile {
   must_change_password: boolean
   timezone: string
   date_of_joining: string | null
+  created_at: string
+  updated_at: string
+}
+
+/**
+ * The columns 008_employee_onboarding.sql adds to `profiles`.
+ *
+ * Kept as a separate interface merged into `Profile` so the original 001 shape
+ * stays readable — this is the onboarding wizard's payload, not core identity.
+ * `account_number_enc` is AES-256-GCM ciphertext and is not selectable by an
+ * ordinary session at all; it appears here for service-role code only.
+ */
+export interface ProfileOnboardingFields {
+  preferred_first_name: string | null
+  preferred_last_name: string | null
+  pronouns: string | null
+  date_of_birth: string | null
+  gender: string | null
+  street_address: string | null
+  apartment: string | null
+  city: string | null
+  state_province: string | null
+  zip_postal: string | null
+  country: string | null
+  home_phone: string | null
+  work_phone: string | null
+  work_email: string | null
+  hire_date: string | null
+  employment_status: string | null
+  reporting_manager_id: string | null
+  pay_type: string | null
+  pay_rate: number | null
+  pay_frequency: string | null
+  employment_type: string | null
+  bank_name: string | null
+  account_holder_name: string | null
+  account_number_enc: string | null
+  routing_code: string | null
+  account_type: string | null
+  emergency_contact_name: string | null
+  emergency_relationship: string | null
+  emergency_phone: string | null
+  emergency_email: string | null
+  resume_url: string | null
+  offer_letter_url: string | null
+  id_proof_type: string | null
+  id_proof_url: string | null
+  additional_docs: OnboardingAdditionalDoc[]
+  internal_notes: string | null
+  compliance_notes: string | null
+}
+
+export interface OnboardingAdditionalDoc {
+  key: string
+  fileName: string
+  label?: string | null
+  sizeBytes?: number
+}
+
+export type OnboardingStatus = 'draft' | 'completed' | 'cancelled'
+
+/** A row of `employee_onboarding` — the resumable draft behind the wizard. */
+export interface EmployeeOnboarding extends ProfileOnboardingFields {
+  id: string
+  tenant_id: string
+  created_by: string
+  status: OnboardingStatus
+  first_name: string | null
+  middle_name: string | null
+  last_name: string | null
+  personal_email: string | null
+  phone: string | null
+  work_auth_status: string | null
+  visa_type: string | null
+  visa_number: string | null
+  visa_start_date: string | null
+  visa_expiry_date: string | null
+  auth_document_url: string | null
+  employee_code: string | null
+  department_id: string | null
+  designation: string | null
+  photo_url: string | null
+  current_step: number
+  completed_steps: number[]
+  employee_profile_id: string | null
+  completed_at: string | null
   created_at: string
   updated_at: string
 }

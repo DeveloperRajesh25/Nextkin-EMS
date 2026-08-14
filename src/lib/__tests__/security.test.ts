@@ -1,10 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest'
 import {
   encryptToken, decryptToken, isEncryptionConfigured, safeEqual,
   generateTempPassword, EncryptionKeyError,
 } from '@/lib/crypto'
 import { isDangerousMime, sanitizeSvg, sizeLimitFor, checkPresignClaims } from '@/lib/upload'
-import { keyBelongsToTenant, buildKey, extensionOf } from '@/lib/r2'
+import { keyBelongsToTenant, buildKey, extensionOf, presignPut, r2Config } from '@/lib/r2'
 
 const VALID_KEY = 'a'.repeat(64) // 64 hex chars = 32 bytes
 const originalKey = process.env.GOOGLE_TOKEN_ENCRYPTION_KEY
@@ -272,5 +272,46 @@ describe('R2 key scoping', () => {
     expect(extensionOf('archive.tar.gz')).toBe('gz')
     expect(extensionOf('noextension')).toBe('')
     expect(extensionOf('weird.p df')).toBe('pdf')
+  })
+})
+
+/**
+ * The SHAPE of the presigned upload url.
+ *
+ * Both properties asserted here have broken uploads in production before, and
+ * neither is visible in a server log — the failure happens between the browser
+ * and the storage backend. They are cheap to assert and expensive to rediscover.
+ */
+describe('R2 presigned upload url', () => {
+  let url: string
+
+  beforeAll(async () => {
+    Object.assign(r2Config, {
+      accessKeyId: 'A'.repeat(32),
+      secretAccessKey: 'S'.repeat(64),
+      bucket: 'test-bucket',
+      endpoint: 'https://account.r2.cloudflarestorage.com',
+    })
+    url = await presignPut('tenant/photos/abc.png', 'image/png')
+  })
+
+  it('carries no SDK checksum parameters', () => {
+    // A CRC32 computed at signing time is the checksum of an EMPTY body; the
+    // browser's real bytes would then be rejected as a mismatch.
+    expect(url).not.toMatch(/x-amz-checksum/i)
+    expect(url).not.toMatch(/x-amz-sdk-checksum-algorithm/i)
+  })
+
+  it('signs nothing a browser cannot control', () => {
+    // `Content-Length` is a forbidden header name in fetch. Signing it makes the
+    // signature depend on a value no client code can set.
+    const signed = new URL(url).searchParams.get('X-Amz-SignedHeaders')
+    expect(signed).toBe('host')
+  })
+
+  it('expires', () => {
+    const expires = Number(new URL(url).searchParams.get('X-Amz-Expires'))
+    expect(expires).toBeGreaterThan(0)
+    expect(expires).toBeLessThanOrEqual(15 * 60)
   })
 })

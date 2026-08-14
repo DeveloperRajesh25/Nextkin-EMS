@@ -300,13 +300,35 @@ documents, org logos.
 [
   {
     "AllowedOrigins": ["http://localhost:3000", "https://your-domain.com"],
-    "AllowedMethods": ["PUT", "GET"],
+    "AllowedMethods": ["PUT", "GET", "HEAD"],
     "AllowedHeaders": ["content-type", "content-length"],
     "ExposeHeaders": ["etag"],
     "MaxAgeSeconds": 3600
   }
 ]
 ```
+
+   **`AllowedOrigins` must list every origin the app is served from — each
+   preview domain, the Vercel domain and the custom domain.** An origin missing
+   here fails only in a browser, never on the server: R2 refuses the preflight
+   with a 403 and the page sees an opaque network error. Nothing appears in the
+   application logs, because the request never reached the application.
+
+6. **Verify it.** `npm run r2:doctor` sends the exact preflight a browser sends,
+   for every origin, then does a real presigned PUT → HEAD → GET → DELETE round
+   trip against the bucket:
+
+```bash
+npm run r2:doctor
+R2_CORS_ORIGINS="https://your-domain.com,http://localhost:3000" npm run r2:doctor
+npm run r2:doctor -- --fix   # writes the policy; needs an Admin Read & Write token
+```
+
+   Without `R2_CORS_ORIGINS` it checks `APP_URL` and `http://localhost:3000`.
+   `--fix` fails with `AccessDenied` on the app's own Object Read & Write token —
+   deliberately, since the credentials the app runs on should not be able to
+   rewrite the bucket's configuration. Paste the policy it prints into the
+   dashboard instead.
 
 > **Why uploads go browser → R2 directly.** A 25MB visa document routed through
 > a serverless function would be buffered in a lambda that bills by the
@@ -678,9 +700,20 @@ registered and what kind of account they are). The credentials email and the
 **Confirmation link fails with a `code_verifier` error**
 The email template is still the default. See §4c.
 
-**Uploads fail with a CORS error**
+**Uploads fail — "Could not reach file storage", or nothing but a network error
+in the console**
 The R2 bucket CORS policy does not include your origin, or omits `PUT` /
-`content-type`. See §6 step 5.
+`content-type`. This is the usual cause of an upload that works locally and
+fails in production: `localhost:3000` was allowed, the deployed domain never
+was. Run `R2_CORS_ORIGINS="https://your-domain.com" npm run r2:doctor` — a
+`preflight → 403` line names it exactly. See §6 steps 5–6.
+
+**Uploads fail with a checksum mismatch**
+The S3 client is computing a CRC32 that ends up in the presigned url as
+`x-amz-checksum-crc32` — the checksum of an empty body, since there is no body
+at signing time. `src/lib/r2.ts` sets `requestChecksumCalculation:
+'WHEN_REQUIRED'` to prevent it; `npm run r2:doctor` asserts the signed url stays
+clean.
 
 **Google Calendar: "Google did not return a refresh token"**
 Google only issues one on first consent. The user must remove the app at

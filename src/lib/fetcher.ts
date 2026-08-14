@@ -90,17 +90,34 @@ export async function uploadFile(
     purpose,
   })
 
-  const put = await fetch(presigned.url, {
-    method: 'PUT',
-    // Must match the signed headers exactly or R2 rejects the signature.
-    headers: {
-      'Content-Type': file.type || 'application/octet-stream',
-      'Content-Length': String(file.size),
-    },
-    body: file,
-  }).catch(() => null)
+  /*
+   * Content-Type only. `Content-Length` is a forbidden header name — fetch
+   * strips it and sets its own — and the presigned url signs nothing but `host`,
+   * so there is no header here that can break the signature.
+   *
+   * The two failure modes are worth telling apart. A THROW means the request
+   * never completed a round trip: almost always the bucket's CORS policy does
+   * not list this origin (the preflight is refused, and the browser reports it to
+   * script as an opaque network error). A RESPONSE with a bad status means R2
+   * answered and declined — an expired signature, usually.
+   */
+  let put: Response
+  try {
+    put = await fetch(presigned.url, {
+      method: 'PUT',
+      headers: { 'Content-Type': file.type || 'application/octet-stream' },
+      body: file,
+    })
+  } catch {
+    throw new ApiClientError(
+      'Could not reach file storage. If this keeps happening the storage bucket ' +
+        'is not accepting uploads from this site (CORS).',
+      0
+    )
+  }
 
-  if (!put || !put.ok) {
+  if (!put.ok) {
+    console.error('[upload] storage rejected the PUT', put.status, await put.text().catch(() => ''))
     throw new ApiClientError('The upload did not complete. Please try again.', 502)
   }
 

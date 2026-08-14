@@ -68,6 +68,16 @@ export function getR2(): S3Client {
     region: 'auto',
     endpoint: endpointUrl(),
     forcePathStyle: true, // R2 addresses buckets in the path, not the host
+    /*
+     * SDK ≥3.729 computes a CRC32 for every PutObject by default. On a PRESIGNED
+     * url that lands in the query string as `x-amz-checksum-crc32=AAAAAA==` — the
+     * checksum of an EMPTY body, because at signing time there is no body. Any
+     * storage backend that honours it then rejects the browser's real bytes as a
+     * checksum mismatch. Nothing here needs SDK-side checksums: finalize re-reads
+     * the stored object and validates it for real.
+     */
+    requestChecksumCalculation: 'WHEN_REQUIRED',
+    responseChecksumValidation: 'WHEN_REQUIRED',
     credentials: {
       accessKeyId: r2Config.accessKeyId,
       secretAccessKey: r2Config.secretAccessKey,
@@ -122,21 +132,22 @@ export function extensionOf(filename: string): string {
 /**
  * A presigned PUT the browser uploads to directly.
  *
- * Content-Type and Content-Length are baked into the signature, so the stored
- * object cannot differ in type or size from what was declared. That is defense
- * in depth only — finalize re-HEADs the object for its true size and re-sniffs
- * its real bytes, because a signature proves intent, not content.
+ * NOTHING beyond `host` is signed. Content-Length is deliberately NOT baked into
+ * the signature: `Content-Length` is a forbidden header name in fetch, so a
+ * browser cannot set it and the value it sends is entirely up to the engine —
+ * signing it turns a routine upload into a SignatureDoesNotMatch that no client
+ * code can fix. The signature's job is to authorize writing THIS key, once,
+ * within five minutes.
+ *
+ * Size and type are not taken on trust as a result — they never were. Finalize
+ * re-HEADs the object for its true size and sniffs its real bytes, because a
+ * signature proves intent, not content.
  */
-export async function presignPut(
-  key: string,
-  contentType: string,
-  contentLength: number
-): Promise<string> {
+export async function presignPut(key: string, contentType: string): Promise<string> {
   const cmd = new PutObjectCommand({
     Bucket: r2Config.bucket,
     Key: key,
     ContentType: contentType || 'application/octet-stream',
-    ContentLength: contentLength,
   })
   return getSignedUrl(getR2(), cmd, { expiresIn: PUT_TTL_SECONDS })
 }

@@ -54,7 +54,7 @@ async function handlePOST(request: NextRequest) {
   if (!claims.ok) return jsonError(claims.error, 400)
 
   const key = buildKey(ctx.tenantId, FOLDERS[input.purpose] ?? 'files', ext)
-  const url = await presignPut(key, input.contentType, input.sizeBytes)
+  const url = await presignPut(key, input.contentType)
 
   return jsonOk({ url, key })
 }

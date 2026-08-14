@@ -22,7 +22,7 @@ this is purely a config/dashboard checklist, not a code change.
 | 3 | **Supabase** → Authentication → URL Configuration | Site URL | `https://nextkin-ems.vercel.app` | ⬜ |
 | 4 | Same as above | Redirect URLs allowlist — add | `https://nextkin-ems.vercel.app/**` | ⬜ |
 | 5 | **Google Cloud Console** → APIs & Services → Credentials → your OAuth client | Authorized redirect URIs — add | `https://nextkin-ems.vercel.app/api/integrations/google/callback` | ⬜ (only if Google Calendar integration is used) |
-| 6 | **Cloudflare R2** → bucket `nextkinlife-ems` → Settings → CORS Policy | `AllowedOrigins` — add | `https://nextkin-ems.vercel.app` | ⬜ |
+| 6 | **Cloudflare R2** → bucket `nextkinlife-ems` → Settings → CORS Policy | `AllowedOrigins` — add | `https://nextkin-ems.vercel.app` | ⬜ **← verified missing; every upload in production fails until this is done. Check with `R2_CORS_ORIGINS="https://nextkin-ems.vercel.app" npm run r2:doctor`** |
 | 7 | **cron-job.org** → both jobs (visa reminders, calendar sync) | Job URL | `https://nextkin-ems.vercel.app/api/cron/visa-reminders` and `.../api/cron/calendar-sync` | ⬜ |
 
 Rows 3–4 control the link inside Supabase's own confirmation/reset-password

@@ -14,7 +14,8 @@
     "type-check": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:isolation": "tsx scripts/tenant-isolation-test.ts"
+    "test:isolation": "tsx scripts/tenant-isolation-test.ts",
+    "r2:doctor": "tsx scripts/r2-doctor.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.716.0",

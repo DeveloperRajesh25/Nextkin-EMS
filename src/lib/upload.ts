@@ -26,62 +26,29 @@ import 'server-only'
  * unreferenced object can exist for a moment, but a row NEVER points at content
  * that was not inspected.
  */
-import DOMPurify from 'isomorphic-dompurify'
 import { headObject, getObjectHead, getObject, putObject, deleteObject } from '@/lib/r2'
-
-/** file-type only needs the first few KB to fingerprint anything it knows. */
-export const SNIFF_BYTES = 4100
-
-const MAX_SVG_BYTES = 2 * 1024 * 1024
-
-/** Per-purpose byte caps. */
-export const SIZE_LIMITS: Record<string, number> = {
-  photo: 5 * 1024 * 1024,
-  logo: 2 * 1024 * 1024,
-  payslip: 15 * 1024 * 1024,
-  employee_doc: 25 * 1024 * 1024,
-  work_auth: 25 * 1024 * 1024,
-  general: 50 * 1024 * 1024,
-}
-
-export function sizeLimitFor(purpose: string): number {
-  return SIZE_LIMITS[purpose] ?? SIZE_LIMITS.general
-}
-
-/** Purposes that must end up as a genuine raster image. */
-const IMAGE_PURPOSES = new Set(['photo', 'logo'])
-/** Purposes where an SVG is acceptable (after sanitization). */
-const SVG_ALLOWED_PURPOSES = new Set(['logo'])
-
-const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'avif', 'svg'])
+import {
+  SNIFF_BYTES,
+  MAX_SVG_BYTES,
+  IMAGE_PURPOSES,
+  SVG_ALLOWED_PURPOSES,
+  IMAGE_EXTS,
+  isDangerousMime,
+  sizeLimitFor,
+} from '@/lib/upload-policy'
 
 /**
- * Content types that must never be stored, whatever the extension or the
- * claimed type says. HTML is in here because a stored HTML file served from a
- * storage origin is a stored-XSS primitive.
+ * The rules live in `@/lib/upload-policy`, which imports nothing heavy. Re-
+ * exported here so existing callers are unaffected — but a route that needs
+ * ONLY the rules should import that module directly and skip everything below.
  */
-const DANGEROUS_MIMES = new Set([
-  'application/x-msdownload',
-  'application/x-executable',
-  'application/x-elf',
-  'application/x-mach-binary',
-  'application/vnd.microsoft.portable-executable',
-  'application/x-dosexec',
-  'application/java-vm',
-  'application/java-archive',
-  'application/wasm',
-  'application/x-sh',
-  'application/x-shellscript',
-  'application/x-msdos-program',
-  'application/x-bat',
-  'text/html',
-  'application/xhtml+xml',
-  'application/hta',
-])
-
-export function isDangerousMime(mime: string | null | undefined): boolean {
-  return !!mime && DANGEROUS_MIMES.has(mime.toLowerCase())
-}
+export {
+  SNIFF_BYTES,
+  SIZE_LIMITS,
+  sizeLimitFor,
+  isDangerousMime,
+  checkPresignClaims,
+} from '@/lib/upload-policy'
 
 /**
  * Sniff the true MIME from leading bytes.
@@ -106,9 +73,26 @@ export async function sniffMime(head: Uint8Array): Promise<string | null> {
 /**
  * Strip everything executable from an SVG. Returns the cleaned markup, or null
  * if the input is not a usable SVG or still looks dangerous afterwards.
+ *
+ * DOMPurify is imported DYNAMICALLY, like `file-type` and `unpdf` above and for
+ * the same reason: it carries jsdom, it is external to the bundle, and the cost
+ * of loading it belongs to the one upload in a thousand that is actually an SVG
+ * — not to every module that transitively imports this file. A static import
+ * here took `/api/files/presign` down with it at cold start.
+ *
+ * Failing to load it returns null, which callers already treat as "refuse this
+ * SVG". Fail closed: an SVG that could not be sanitized is never stored.
  */
-export function sanitizeSvg(svg: string): string | null {
+export async function sanitizeSvg(svg: string): Promise<string | null> {
   if (!svg || svg.length > MAX_SVG_BYTES) return null
+
+  let DOMPurify: { sanitize: (s: string, cfg: object) => string }
+  try {
+    DOMPurify = (await import('isomorphic-dompurify')).default
+  } catch (err) {
+    console.error('[upload] DOMPurify unavailable; refusing the SVG', err)
+    return null
+  }
 
   let clean: string
   try {
@@ -185,7 +169,7 @@ export async function validateStoredObject(opts: FinalizeOptions): Promise<Valid
 
     let clean: string | null
     try {
-      clean = sanitizeSvg((await getObject(key)).toString('utf8'))
+      clean = await sanitizeSvg((await getObject(key)).toString('utf8'))
     } catch {
       clean = null
     }
@@ -240,37 +224,6 @@ export async function validateStoredObject(opts: FinalizeOptions): Promise<Valid
     contentType: sniffed || claimed || 'application/octet-stream',
     size: head.size,
   }
-}
-
-/**
- * Pre-flight the CLAIMS at presign time. Cheap rejections (obviously wrong type
- * or oversized) happen before we hand out an upload URL at all; the real gate is
- * still `validateStoredObject`.
- */
-export function checkPresignClaims(
-  purpose: string,
-  contentType: string,
-  sizeBytes: number,
-  ext: string
-): { ok: true } | { ok: false; error: string } {
-  const limit = sizeLimitFor(purpose)
-  if (sizeBytes > limit) {
-    const mb = Math.max(1, Math.floor(limit / (1024 * 1024)))
-    return { ok: false, error: `That file is larger than the ${mb}MB limit.` }
-  }
-  if (isDangerousMime(contentType)) {
-    return { ok: false, error: 'That file type is not allowed.' }
-  }
-  if (IMAGE_PURPOSES.has(purpose)) {
-    const svgOk = SVG_ALLOWED_PURPOSES.has(purpose) && ext === 'svg'
-    if (!contentType.toLowerCase().startsWith('image/') && !svgOk) {
-      return { ok: false, error: 'Please choose an image file.' }
-    }
-  }
-  if (purpose === 'payslip' && contentType.toLowerCase() !== 'application/pdf') {
-    return { ok: false, error: 'A payslip must be a PDF.' }
-  }
-  return { ok: true }
 }
 
 /**

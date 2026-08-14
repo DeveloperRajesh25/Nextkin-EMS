@@ -1,10 +1,13 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest'
+import { readFile } from 'fs/promises'
 import {
   encryptToken, decryptToken, isEncryptionConfigured, safeEqual,
   generateTempPassword, EncryptionKeyError,
 } from '@/lib/crypto'
 import { isDangerousMime, sanitizeSvg, sizeLimitFor, checkPresignClaims } from '@/lib/upload'
-import { keyBelongsToTenant, buildKey, extensionOf, presignPut, r2Config } from '@/lib/r2'
+import {
+  keyBelongsToTenant, buildKey, extensionOf, presignPut, r2Config, r2ConfigProblem,
+} from '@/lib/r2'
 
 const VALID_KEY = 'a'.repeat(64) // 64 hex chars = 32 bytes
 const originalKey = process.env.GOOGLE_TOKEN_ENCRYPTION_KEY
@@ -159,21 +162,21 @@ describe('dangerous MIME denylist', () => {
 })
 
 describe('SVG sanitization', () => {
-  it('strips a script tag', () => {
-    const clean = sanitizeSvg('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script><circle r="5"/></svg>')
+  it('strips a script tag', async () => {
+    const clean = await sanitizeSvg('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script><circle r="5"/></svg>')
     expect(clean).not.toBeNull()
     expect(clean!.toLowerCase()).not.toContain('<script')
     expect(clean).toContain('circle')
   })
 
-  it('strips inline event handlers', () => {
-    const clean = sanitizeSvg('<svg xmlns="http://www.w3.org/2000/svg"><rect onload="alert(1)" width="10" height="10"/></svg>')
+  it('strips inline event handlers', async () => {
+    const clean = await sanitizeSvg('<svg xmlns="http://www.w3.org/2000/svg"><rect onload="alert(1)" width="10" height="10"/></svg>')
     expect(clean).not.toBeNull()
     expect(clean!.toLowerCase()).not.toContain('onload')
   })
 
-  it('strips foreignObject, which can carry arbitrary HTML', () => {
-    const clean = sanitizeSvg(
+  it('strips foreignObject, which can carry arbitrary HTML', async () => {
+    const clean = await sanitizeSvg(
       '<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><body xmlns="http://www.w3.org/1999/xhtml"><script>alert(1)</script></body></foreignObject></svg>'
     )
     if (clean !== null) {
@@ -182,17 +185,46 @@ describe('SVG sanitization', () => {
     }
   })
 
-  it('rejects input that is not an SVG at all', () => {
-    expect(sanitizeSvg('<html><body>hi</body></html>')).toBeNull()
-    expect(sanitizeSvg('')).toBeNull()
+  it('rejects input that is not an SVG at all', async () => {
+    expect(await sanitizeSvg('<html><body>hi</body></html>')).toBeNull()
+    expect(await sanitizeSvg('')).toBeNull()
   })
 
-  it('keeps legitimate SVG markup intact', () => {
-    const clean = sanitizeSvg(
+  it('keeps legitimate SVG markup intact', async () => {
+    const clean = await sanitizeSvg(
       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 4h16v16H4z" fill="#C41E33"/></svg>'
     )
     expect(clean).toContain('path')
     expect(clean).toContain('#C41E33')
+  })
+})
+
+/**
+ * `/api/files/presign` must not be able to import the heavy validation
+ * pipeline. This is the regression guard for a cold-start crash that took the
+ * whole route down before any error handler existed to explain it.
+ */
+describe('presign route dependency weight', () => {
+  it('reaches no optional heavy dependency from the policy module', async () => {
+    const policy = await import('@/lib/upload-policy')
+    expect(typeof policy.checkPresignClaims).toBe('function')
+
+    const source = await readFile(
+      new URL('../upload-policy.ts', import.meta.url),
+      'utf8'
+    )
+    for (const heavy of ['isomorphic-dompurify', 'jsdom', 'file-type', 'unpdf']) {
+      expect(source).not.toContain(`'${heavy}'`)
+    }
+  })
+
+  it('keeps the route importing policy, not the pipeline', async () => {
+    const route = await readFile(
+      new URL('../../app/api/files/presign/route.ts', import.meta.url),
+      'utf8'
+    )
+    expect(route).toContain("@/lib/upload-policy")
+    expect(route).not.toMatch(/from '@\/lib\/upload'/)
   })
 })
 
@@ -314,4 +346,55 @@ describe('R2 presigned upload url', () => {
     expect(expires).toBeGreaterThan(0)
     expect(expires).toBeLessThanOrEqual(15 * 60)
   })
+})
+
+/**
+ * Configuration faults must be DIAGNOSED, not thrown.
+ *
+ * Each shape below made the SDK throw `TypeError: Invalid URL` deep inside
+ * signing, which surfaced as a bare 500 on `/api/files/presign` — an upload that
+ * fails with nothing anywhere to say why. They are cheap to detect up front.
+ */
+describe('R2 configuration diagnosis', () => {
+  const good = {
+    accountId: '',
+    accessKeyId: 'A'.repeat(32),
+    secretAccessKey: 'S'.repeat(64),
+    bucket: 'test-bucket',
+    endpoint: 'https://account.r2.cloudflarestorage.com',
+  }
+  const withConfig = (patch: Partial<typeof good>) => {
+    Object.assign(r2Config, good, patch)
+    return r2ConfigProblem()
+  }
+
+  it('passes a well-formed configuration', () => {
+    expect(withConfig({})).toBeNull()
+    expect(withConfig({ endpoint: '', accountId: 'abc123' })).toBeNull()
+  })
+
+  it('names each missing variable', () => {
+    expect(withConfig({ bucket: '' })).toContain('R2_BUCKET')
+    expect(withConfig({ accessKeyId: '' })).toContain('R2_ACCESS_KEY_ID')
+    expect(withConfig({ endpoint: '', accountId: '' })).toContain('R2_ENDPOINT or R2_ACCOUNT_ID')
+  })
+
+  it('rejects an endpoint that is not a usable URL', () => {
+    expect(withConfig({ endpoint: 'account.r2.cloudflarestorage.com' })).toContain('R2_ENDPOINT')
+    expect(withConfig({ endpoint: 'http://account.r2.cloudflarestorage.com' })).toContain('https://')
+  })
+
+  it('rejects the bucket being pasted into the endpoint', () => {
+    // What Cloudflare's bucket page shows is the endpoint WITH the bucket on it.
+    const problem = withConfig({ endpoint: 'https://account.r2.cloudflarestorage.com/my-bucket' })
+    expect(problem).toContain('R2_BUCKET')
+  })
+
+  it('never leaks a value', () => {
+    const problem = withConfig({ endpoint: 'nonsense', secretAccessKey: 'topsecret' })
+    expect(problem).not.toContain('topsecret')
+    expect(problem).not.toContain('nonsense')
+  })
+
+  afterEach(() => Object.assign(r2Config, good))
 })

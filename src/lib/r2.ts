@@ -27,12 +27,26 @@ import { randomUUID } from 'crypto'
 const PUT_TTL_SECONDS = 5 * 60
 const DEFAULT_GET_TTL_SECONDS = 15 * 60 // §3 cap: signed URLs live at most 15 min
 
+/**
+ * Read one R2 variable, defensively.
+ *
+ * A dashboard is not a shell. Pasting `R2_ENDPOINT="https://…"` into Vercel
+ * stores the QUOTES as part of the value, and a trailing newline survives a copy
+ * out of a terminal — neither is visible in the UI afterwards. The SDK then
+ * builds `new URL('"https://…')`, throws `TypeError: Invalid URL`, and every
+ * presign answers 500 with nothing in the response to say why. Stripping the
+ * wrapper here costs nothing and removes a whole class of unexplainable outage.
+ */
+function envVar(name: string): string {
+  return (process.env[name] || '').trim().replace(/^["']|["']$/g, '').trim()
+}
+
 export const r2Config = {
-  accountId: process.env.R2_ACCOUNT_ID || '',
-  accessKeyId: process.env.R2_ACCESS_KEY_ID || '',
-  secretAccessKey: process.env.R2_SECRET_ACCESS_KEY || '',
-  bucket: process.env.R2_BUCKET || '',
-  endpoint: process.env.R2_ENDPOINT || '',
+  accountId: envVar('R2_ACCOUNT_ID'),
+  accessKeyId: envVar('R2_ACCESS_KEY_ID'),
+  secretAccessKey: envVar('R2_SECRET_ACCESS_KEY'),
+  bucket: envVar('R2_BUCKET'),
+  endpoint: envVar('R2_ENDPOINT'),
 }
 
 export function isR2Configured(): boolean {
@@ -42,6 +56,51 @@ export function isR2Configured(): boolean {
     r2Config.bucket &&
     (r2Config.endpoint || r2Config.accountId)
   )
+}
+
+/**
+ * What is wrong with the configuration, in words a person can act on — or null
+ * if it is usable. Names VARIABLES, never values: this string is safe to return
+ * to an authenticated caller, and a secret must not travel in an error.
+ *
+ * Every case below is a real misconfiguration that used to surface as a bare
+ * 500, which is the least useful thing an upload can do.
+ */
+export function r2ConfigProblem(): string | null {
+  const missing: string[] = [
+    ['R2_ACCESS_KEY_ID', r2Config.accessKeyId],
+    ['R2_SECRET_ACCESS_KEY', r2Config.secretAccessKey],
+    ['R2_BUCKET', r2Config.bucket],
+  ]
+    .filter(([, v]) => !v)
+    .map(([k]) => k)
+
+  if (!r2Config.endpoint && !r2Config.accountId) missing.push('R2_ENDPOINT or R2_ACCOUNT_ID')
+  if (missing.length) return `File storage is not configured: ${missing.join(', ')} is not set.`
+
+  let url: URL
+  try {
+    url = new URL(endpointUrl())
+  } catch {
+    return 'File storage is misconfigured: R2_ENDPOINT is not a valid URL.'
+  }
+  if (url.protocol !== 'https:') {
+    return 'File storage is misconfigured: R2_ENDPOINT must start with https://.'
+  }
+  /*
+   * Cloudflare's bucket page shows the S3 API endpoint WITH the bucket appended.
+   * Pasting that whole string, with forcePathStyle, addresses
+   * `/<bucket>/<bucket>/<key>` — every upload 404s in a way that looks like a
+   * permissions problem. The bucket belongs in R2_BUCKET and nowhere else.
+   */
+  if (url.pathname.replace(/\/+$/, '')) {
+    return (
+      'File storage is misconfigured: R2_ENDPOINT must be the bare host ' +
+      '(https://<account-id>.r2.cloudflarestorage.com) with no bucket path — ' +
+      'the bucket name belongs in R2_BUCKET.'
+    )
+  }
+  return null
 }
 
 function endpointUrl(): string {
@@ -58,12 +117,8 @@ let cached: S3Client | null = null
  */
 export function getR2(): S3Client {
   if (cached) return cached
-  if (!isR2Configured()) {
-    throw new Error(
-      'Cloudflare R2 is not configured: set R2_ACCOUNT_ID (or R2_ENDPOINT), ' +
-        'R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY and R2_BUCKET.'
-    )
-  }
+  const problem = r2ConfigProblem()
+  if (problem) throw new Error(`[r2] ${problem}`)
   cached = new S3Client({
     region: 'auto',
     endpoint: endpointUrl(),

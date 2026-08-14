@@ -708,6 +708,26 @@ fails in production: `localhost:3000` was allowed, the deployed domain never
 was. Run `R2_CORS_ORIGINS="https://your-domain.com" npm run r2:doctor` — a
 `preflight → 403` line names it exactly. See §6 steps 5–6.
 
+**An upload route answers 500 with a body that is not JSON**
+Every handler is wrapped in `withErrorHandler`, so a 500 carrying no `error` key
+did not come from application code — the function failed to BOOT, before any
+handler existed. The cause is a module-load failure in something the route
+imports. `/api/files/presign` used to import `@/lib/upload`, which statically
+required DOMPurify → jsdom (799 files traced into that function) for a route
+that never touches an SVG. It now imports `@/lib/upload-policy`, which has no
+optional dependencies at all — 150 files traced, jsdom nowhere in them. If you
+add an import to an upload route, keep the heavy ones behind `await import()`
+the way `file-type`, `unpdf` and DOMPurify are.
+
+**`/api/files/presign` answers 500 and the page just says "Something went wrong"**
+An R2 variable is malformed rather than missing. The usual cause is pasting a
+value into a dashboard **with the quotes**: `R2_ENDPOINT="https://…"` stores the
+quote characters, `new URL()` throws `TypeError: Invalid URL` inside the SDK, and
+the failure surfaces as an unexplained 500. Quotes and stray whitespace are now
+stripped on read, and anything still unusable answers **503 naming the variable**
+(never its value). Also check `R2_ENDPOINT` is the bare host — Cloudflare's
+bucket page shows it with the bucket appended, which belongs in `R2_BUCKET`.
+
 **Uploads fail with a checksum mismatch**
 The S3 client is computing a CRC32 that ends up in the presigned url as
 `x-amz-checksum-crc32` — the checksum of an empty body, since there is no body
